@@ -7,7 +7,7 @@ import { Input } from './ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Label } from './ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Search, QrCode, Package, Camera, Mic, Lightbulb, Film, Calendar, CheckCircle2, Loader2, CheckSquare, Square, Plus } from 'lucide-react';
+import { Search, QrCode, Package, Camera, Mic, Lightbulb, Film, Calendar, CheckCircle2, Loader2, CheckSquare, Plus } from 'lucide-react';
 import { QRScanner } from './QRScanner';
 import { useTheme } from './ThemeProvider';
 import equipmentService from '../services/equipmentService';
@@ -34,6 +34,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
   
   // --- REAL DATA STATE ---
   const [equipmentList, setEquipmentList] = useState<any[]>([]);
+  const [accessoryList, setAccessoryList] = useState<any[]>([]); // New list for accessories from DB
   const [myRentals, setMyRentals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -50,28 +51,28 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
         equipmentService.getMyActiveRentals()
       ]);
 
-      const mappedEquipment = (allEquipment.results || allEquipment).map((item: any) => {
-        // Dynamic accessories based on category
-        let acc = 'Standard Kit, Case';
-        const cat = item.category?.toLowerCase() || '';
-        if(cat.includes('camera')) acc = 'Battery (2x), SD Card (128GB), Lens Cap, Strap, Carrying Case';
-        else if(cat.includes('audio')) acc = 'XLR Cable, Windshield, Shock Mount, Pouch';
-        else if(cat.includes('light')) acc = 'Power Cable, Light Stand, Diffuser, Case';
-        else if(cat.includes('access')) acc = 'Mounting Plate, Tool Kit, Pouch';
+      const rawList = allEquipment.results || allEquipment;
 
-        return {
-            id: item.id,
-            name: item.name,
-            category: item.category?.toLowerCase() || 'cameras',
-            status: item.status, 
-            qrCode: item.equipment_id,
-            specs: item.description || 'Professional equipment',
-            image: item.image, 
-            accessories: acc, // Dynamic list string
-            quantity_available: item.quantity_available
-        };
-      });
+      // 1. Separate "Accessories" from main equipment
+      // Based on your model: ('accessories', 'Accessories')
+      const accessoriesFromDB = rawList.filter((item: any) => 
+        item.category?.toLowerCase().includes('access') || item.category === 'accessories'
+      );
+      setAccessoryList(accessoriesFromDB);
 
+      // 2. Map Catalog
+      const mappedEquipment = rawList.map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        category: item.category?.toLowerCase() || 'cameras',
+        status: item.status, 
+        qrCode: item.equipment_id,
+        specs: item.description || 'Professional equipment',
+        image: item.image, 
+        quantity_available: item.quantity_available
+      }));
+
+      // 3. Map Rentals
       const rawRentals = myRentalsResponse.results || myRentalsResponse;
       const activeRentals = rawRentals
         .filter((r: any) => r.status === 'active')
@@ -93,15 +94,13 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     }
   };
 
-  // Helper: Open Modal & Reset Form
+  // Open Modal & Reset Form
   const openRentalModal = (item: any) => {
     setSelectedEquipment(item);
     setPickupDate(new Date().toISOString().split('T')[0]);
     setRentalDuration('1');
     setCustomAccessory('');
-    // Split the accessories string into an array for checkboxes
-    const defaultAcc = item.accessories ? item.accessories.split(', ') : [];
-    setSelectedAccessories(defaultAcc);
+    setSelectedAccessories([]); // Reset selection
     setShowRentalModal(true);
   };
 
@@ -112,12 +111,11 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     return date.toLocaleDateString();
   };
 
-  // Toggle accessory checkbox
-  const toggleAccessory = (acc: string) => {
-    if (selectedAccessories.includes(acc)) {
-      setSelectedAccessories(selectedAccessories.filter(a => a !== acc));
+  const toggleAccessory = (accName: string) => {
+    if (selectedAccessories.includes(accName)) {
+      setSelectedAccessories(selectedAccessories.filter(a => a !== accName));
     } else {
-      setSelectedAccessories([...selectedAccessories, acc]);
+      setSelectedAccessories([...selectedAccessories, accName]);
     }
   };
 
@@ -148,9 +146,9 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     if (!selectedEquipment) return;
     setSubmitting(true);
     
-    // Combine accessories into notes
+    // Combine selected DB items + Custom text into one note string
     const itemsList = selectedAccessories.join(', ');
-    const fullNotes = `Accessories: ${itemsList}. ${customAccessory ? 'Extra: ' + customAccessory : ''}`;
+    const fullNotes = `Additional Items: ${itemsList}. ${customAccessory ? 'Note: ' + customAccessory : ''}`;
 
     try {
         await equipmentService.checkout(
@@ -158,7 +156,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
             'Main Desk', 
             pickupDate, 
             rentalDuration,
-            fullNotes // Send this to backend
+            fullNotes // Sends list of accessories as a note
         );
         alert(`Successfully rented ${selectedEquipment.name}`);
         setShowRentalModal(false);
@@ -247,7 +245,6 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
         </TabsList>
 
         <TabsContent value={selectedCategory} className="mt-6">
-          {/* Equipment Grid */}
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 bg-[rgba(0,0,0,0)]">
             {filteredEquipment.length === 0 ? (
                 <p className="text-gray-500 col-span-4 text-center py-8">No equipment found.</p>
@@ -361,7 +358,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
         </CardContent>
       </Card>
 
-      {/* Rental Modal - UPDATED WITH ACCESSORIES CHECKLIST */}
+      {/* Rental Modal */}
       <Dialog open={showRentalModal} onOpenChange={setShowRentalModal}>
         <DialogContent className="max-w-md bg-gray-900 border-gray-800 text-white max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -385,31 +382,35 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
               </div>
             </div>
 
-            {/* Accessories Checklist - NEW */}
+            {/* DB Accessories Checklist */}
             <div className="space-y-2">
-              <Label className="text-gray-300">Included Accessories (Select to confirm)</Label>
-              <div className="p-3 rounded-lg bg-gray-950 border border-gray-700 space-y-2">
-                {selectedEquipment?.accessories.split(', ').map((acc: string, idx: number) => (
-                    <div key={idx} 
-                         className="flex items-center gap-3 cursor-pointer hover:bg-gray-900 p-1 rounded"
-                         onClick={() => toggleAccessory(acc)}
-                    >
-                        <div className={`h-4 w-4 rounded border flex items-center justify-center ${selectedAccessories.includes(acc) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'}`}>
-                            {selectedAccessories.includes(acc) && <CheckSquare className="h-3 w-3 text-white" />}
+              <Label className="text-gray-300">Select Available Accessories</Label>
+              <div className="p-3 rounded-lg bg-gray-950 border border-gray-700 space-y-2 max-h-40 overflow-y-auto">
+                {accessoryList.length === 0 ? (
+                    <p className="text-sm text-gray-500">No additional accessories found.</p>
+                ) : (
+                    accessoryList.map((acc: any) => (
+                        <div key={acc.id} 
+                             className="flex items-center gap-3 cursor-pointer hover:bg-gray-900 p-1 rounded"
+                             onClick={() => toggleAccessory(acc.name)}
+                        >
+                            <div className={`h-4 w-4 rounded border flex items-center justify-center ${selectedAccessories.includes(acc.name) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'}`}>
+                                {selectedAccessories.includes(acc.name) && <CheckSquare className="h-3 w-3 text-white" />}
+                            </div>
+                            <span className={`text-sm ${selectedAccessories.includes(acc.name) ? 'text-white' : 'text-gray-500'}`}>
+                                {acc.name} <span className="text-xs text-gray-600">({acc.status})</span>
+                            </span>
                         </div>
-                        <span className={`text-sm ${selectedAccessories.includes(acc) ? 'text-white' : 'text-gray-500'}`}>
-                            {acc}
-                        </span>
-                    </div>
-                ))}
+                    ))
+                )}
               </div>
             </div>
 
-            {/* Custom Accessories - NEW */}
+            {/* Custom Notes */}
             <div className="space-y-2">
-              <Label className="text-gray-300">Additional Items / Notes</Label>
+              <Label className="text-gray-300">Other Items / Notes</Label>
               <Input
-                placeholder="e.g. Extra tripod plate..."
+                placeholder="e.g. Need extra battery..."
                 value={customAccessory}
                 onChange={(e) => setCustomAccessory(e.target.value)}
                 className="bg-gray-950 border-gray-700 text-white"

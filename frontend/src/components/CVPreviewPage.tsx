@@ -1,296 +1,332 @@
+// src/components/CVPreviewPage.tsx
+
+import React, { useRef } from 'react';
+import { ArrowLeft, Download, Mail, Phone, MapPin } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 import { Button } from './ui/button';
-import { Card, CardContent } from './ui/card';
-import { ArrowLeft, Download, Mail, Phone, MapPin, Globe, Linkedin, Calendar } from 'lucide-react';
-import { useTheme } from './ThemeProvider';
+import { Card } from './ui/card';
+
+interface Education {
+  id: string;
+  degree: string;
+  institution: string;
+  startDate: string;
+  endDate: string;
+  description: string;
+}
+
+interface Experience {
+  id: string;
+  position: string;
+  company: string;
+  startDate: string;
+  endDate: string;
+  description: string;
+}
+
+interface Skill {
+  id: string;
+  name: string;
+}
+
+interface Certification {
+  id: string;
+  name: string;
+  issuer: string;
+  year: string;
+}
+
+interface Language {
+  id: string;
+  name: string;
+  proficiency: string;
+}
+
+interface Award {
+  id: string;
+  title: string;
+  issuer: string;
+  year: string;
+  description: string;
+}
+
+interface Project {
+  id: string;
+  name: string;
+  description: string;
+  url?: string;
+}
+
+interface Reference {
+  id: string;
+  name: string;
+  position: string;
+  workplace: string;
+  phone: string;
+  email: string;
+}
+
+interface FormData {
+  personal: {
+    fullName: string;
+    title: string;
+    summary: string;
+  };
+  contact: {
+    email: string;
+    phone: string;
+    location: string;
+    linkedin?: string;
+    website?: string;
+  };
+  education: Education[];
+  experience: Experience[];
+  skills: Skill[];
+  certifications: Certification[];
+  languages: Language[];
+  awards: Award[];
+  projects: Project[];
+  references: Reference[];
+}
 
 interface CVPreviewPageProps {
-  formData: any;
+  formData: FormData;
+  photoUrl?: string;
   onBack: () => void;
 }
 
-export function CVPreviewPage({ formData, onBack }: CVPreviewPageProps) {
-  const { theme } = useTheme();
+export const CVPreviewPage: React.FC<CVPreviewPageProps> = ({
+  formData,
+  photoUrl,
+  onBack,
+}) => {
+  const cvRef = useRef<HTMLDivElement | null>(null);
 
-  const handleDownload = () => {
-    // Mock download functionality
-    alert('CV download functionality would be implemented here. This would generate a PDF from the CV data.');
+  const handleDownloadPDF = async () => {
+    if (!cvRef.current) return;
+
+    // Make sure everything visible
+    window.scrollTo(0, 0);
+
+    const canvas = await html2canvas(cvRef.current, {
+      scale: 2,
+      useCORS: true,
+    });
+
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+    pdf.save(`${formData.personal.fullName || 'cv'}.pdf`);
   };
 
   return (
-    <div className={`min-h-screen ${theme === 'light' ? 'bg-gray-50' : 'bg-gray-950'} p-6`}>
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <Button
-            variant="ghost"
+    <div className="min-h-screen bg-[#EBF2FA] p-6">
+      <div className="max-w-6xl mx-auto">
+        {/* Top bar */}
+        <div className="flex items-center justify-between mb-4">
+          <button
             onClick={onBack}
-            className={theme === 'light' ? 'text-gray-700 hover:bg-gray-200' : 'text-gray-300 hover:bg-gray-800'}
+            className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
           >
-            <ArrowLeft className="h-4 w-4 mr-2" />
+            <ArrowLeft className="h-4 w-4 mr-1" />
             Back to Editor
-          </Button>
+          </button>
+
           <Button
-            onClick={handleDownload}
-            className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+            onClick={handleDownloadPDF}
+            className="bg-teal-500 hover:bg-teal-600 text-white"
           >
             <Download className="h-4 w-4 mr-2" />
             Download PDF
           </Button>
         </div>
 
-        {/* CV Preview */}
-        <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
-          <CardContent className="p-8 md:p-12">
-            {/* Header Section */}
-            <div className="border-b pb-6 mb-6" style={{ borderColor: theme === 'light' ? '#e5e7eb' : '#374151' }}>
-              <h1 className={`mb-2 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                {formData.personal?.fullName || 'Your Name'}
+        {/* CV card */}
+        <Card
+          ref={cvRef}
+          className="bg-white border border-gray-200 rounded-2xl shadow-sm px-12 py-10"
+        >
+          {/* Header with photo + name */}
+          <div className="flex items-center mb-6">
+            {photoUrl && (
+              <div className="mr-8">
+                <div className="w-24 h-24 rounded-full overflow-hidden border border-gray-300">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={photoUrl}
+                    alt={formData.personal.fullName}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex-1 text-center">
+              <h1 className="text-2xl font-semibold tracking-[0.15em] text-gray-900">
+                {formData.personal.fullName || 'FULL NAME'}
               </h1>
-              <p className={`mb-4 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                {formData.personal?.title || 'Professional Title'}
+              <p className="mt-1 text-sm uppercase tracking-[0.25em] text-gray-700">
+                {formData.personal.title || 'JOB TITLE'}
               </p>
 
-              {/* Contact Information */}
-              <div className={`grid grid-cols-1 md:grid-cols-2 gap-3 text-sm ${theme === 'light' ? 'text-gray-700' : 'text-gray-300'}`}>
-                {formData.contact?.email && (
-                  <div className="flex items-center gap-2">
-                    <Mail className="h-4 w-4 text-teal-500" />
+              <div className="mt-5 flex items-center justify-center gap-6 text-xs text-gray-700">
+                {formData.contact.email && (
+                  <div className="inline-flex items-center gap-1">
+                    <Mail className="h-3 w-3" />
                     <span>{formData.contact.email}</span>
                   </div>
                 )}
-                {formData.contact?.phone && (
-                  <div className="flex items-center gap-2">
-                    <Phone className="h-4 w-4 text-teal-500" />
+                {formData.contact.phone && (
+                  <div className="inline-flex items-center gap-1">
+                    <Phone className="h-3 w-3" />
                     <span>{formData.contact.phone}</span>
                   </div>
                 )}
-                {formData.contact?.location && (
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-teal-500" />
+                {formData.contact.location && (
+                  <div className="inline-flex items-center gap-1">
+                    <MapPin className="h-3 w-3" />
                     <span>{formData.contact.location}</span>
-                  </div>
-                )}
-                {formData.contact?.website && (
-                  <div className="flex items-center gap-2">
-                    <Globe className="h-4 w-4 text-teal-500" />
-                    <span>{formData.contact.website}</span>
-                  </div>
-                )}
-                {formData.contact?.linkedin && (
-                  <div className="flex items-center gap-2">
-                    <Linkedin className="h-4 w-4 text-teal-500" />
-                    <span>{formData.contact.linkedin}</span>
                   </div>
                 )}
               </div>
             </div>
+          </div>
 
-            {/* Professional Summary */}
-            {formData.personal?.summary && (
-              <div className="mb-6">
-                <h2 className={`mb-3 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Professional Summary
-                </h2>
-                <p className={theme === 'light' ? 'text-gray-700' : 'text-gray-300'}>
-                  {formData.personal.summary}
-                </p>
-              </div>
-            )}
+          <div className="border-t border-gray-200 my-6" />
 
-            {/* Education */}
-            {formData.education && formData.education.length > 0 && (
-              <div className="mb-6">
-                <h2 className={`mb-3 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Education
-                </h2>
-                <div className="space-y-4">
-                  {formData.education.map((edu: any) => (
-                    <div key={edu.id}>
-                      <div className="flex justify-between items-start mb-1">
-                        <div>
-                          <h3 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                            {edu.degree}
-                          </h3>
-                          <p className={`text-sm ${theme === 'light' ? 'text-gray-700' : 'text-gray-300'}`}>
-                            {edu.institution}
+          {/* Main content: two columns like your sample */}
+          <div className="grid grid-cols-2 gap-12 text-[13px] leading-relaxed text-gray-900">
+            {/* LEFT COLUMN */}
+            <div>
+              {/* PROFILE */}
+              {formData.personal.summary && (
+                <section className="mb-8">
+                  <h2 className="font-semibold tracking-wide text-[13px] mb-2">
+                    PROFILE
+                  </h2>
+                  <p className="text-[12px] leading-relaxed text-gray-800">
+                    {formData.personal.summary}
+                  </p>
+                </section>
+              )}
+
+              {/* LANGUAGES */}
+              {formData.languages.length > 0 && (
+                <section className="mb-8">
+                  <h2 className="font-semibold tracking-wide text-[13px] mb-2">
+                    LANGUAGES
+                  </h2>
+                  <div className="space-y-1 text-[12px]">
+                    {formData.languages.map((lang) => (
+                      <p key={lang.id}>
+                        {lang.name.toLowerCase()} – {lang.proficiency}
+                      </p>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* AWARDS */}
+              {formData.awards.length > 0 && (
+                <section className="mb-4">
+                  <h2 className="font-semibold tracking-wide text-[13px] mb-2">
+                    AWARDS &amp; ACHIEVEMENTS
+                  </h2>
+                  <div className="space-y-3 text-[12px]">
+                    {formData.awards.map((award) => (
+                      <div key={award.id}>
+                        <p className="font-semibold">{award.title}</p>
+                        {(award.issuer || award.year) && (
+                          <p className="text-gray-700">
+                            {award.issuer && <span>{award.issuer}</span>}
+                            {award.issuer && award.year && <span> • </span>}
+                            {award.year && <span>{award.year}</span>}
                           </p>
-                        </div>
-                        <div className={`text-sm flex items-center gap-1 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                          <Calendar className="h-3 w-3" />
-                          <span>{edu.startDate} - {edu.endDate}</span>
-                        </div>
+                        )}
+                        {award.description && (
+                          <p className="text-gray-800">{award.description}</p>
+                        )}
                       </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+
+            {/* RIGHT COLUMN */}
+            <div>
+              {/* EDUCATION */}
+              {formData.education.length > 0 && (
+                <section className="mb-6">
+                  <h2 className="font-semibold tracking-wide text-[13px] mb-2">
+                    EDUCATION
+                  </h2>
+                  {formData.education.map((edu) => (
+                    <div key={edu.id} className="mb-3 text-[12px]">
+                      <p className="font-semibold">{edu.degree}</p>
+                      <p className="text-gray-700">{edu.institution}</p>
+                      {(edu.startDate || edu.endDate) && (
+                        <p className="text-gray-700">
+                          {edu.startDate?.slice(0, 7).replace('-', '–')} –{' '}
+                          {edu.endDate?.slice(0, 7).replace('-', '–')}
+                        </p>
+                      )}
                       {edu.description && (
-                        <p className={`text-sm mt-2 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                          {edu.description}
-                        </p>
+                        <p className="text-gray-800">{edu.description}</p>
                       )}
                     </div>
                   ))}
-                </div>
-              </div>
-            )}
+                </section>
+              )}
 
-            {/* Experience */}
-            {formData.experience && formData.experience.length > 0 && (
-              <div className="mb-6">
-                <h2 className={`mb-3 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Experience
-                </h2>
-                <div className="space-y-4">
-                  {formData.experience.map((exp: any) => (
-                    <div key={exp.id}>
-                      <div className="flex justify-between items-start mb-1">
-                        <div>
-                          <h3 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                            {exp.position}
-                          </h3>
-                          <p className={`text-sm ${theme === 'light' ? 'text-gray-700' : 'text-gray-300'}`}>
-                            {exp.company}
-                          </p>
-                        </div>
-                        <div className={`text-sm flex items-center gap-1 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                          <Calendar className="h-3 w-3" />
-                          <span>{exp.startDate} - {exp.endDate}</span>
-                        </div>
-                      </div>
+              {/* EXPERIENCE */}
+              {formData.experience.length > 0 && (
+                <section className="mb-6">
+                  <h2 className="font-semibold tracking-wide text-[13px] mb-2">
+                    EXPERIENCE
+                  </h2>
+                  {formData.experience.map((exp) => (
+                    <div key={exp.id} className="mb-3 text-[12px]">
+                      <p className="font-semibold">{exp.position}</p>
+                      <p className="text-gray-700">{exp.company}</p>
+                      {(exp.startDate || exp.endDate) && (
+                        <p className="text-gray-700">
+                          {exp.startDate?.slice(0, 7).replace('-', '–')} –{' '}
+                          {exp.endDate?.slice(0, 7).replace('-', '–')}
+                        </p>
+                      )}
                       {exp.description && (
-                        <p className={`text-sm mt-2 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                          {exp.description}
-                        </p>
+                        <p className="text-gray-800">{exp.description}</p>
                       )}
                     </div>
                   ))}
-                </div>
-              </div>
-            )}
+                </section>
+              )}
 
-            {/* Skills */}
-            {formData.skills && formData.skills.length > 0 && (
-              <div className="mb-6">
-                <h2 className={`mb-3 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Skills
-                </h2>
-                <div className="flex flex-wrap gap-2">
-                  {formData.skills.map((skill: any) => (
-                    <span
-                      key={skill.id}
-                      className={`px-3 py-1 rounded-full text-sm ${
-                        theme === 'light'
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-teal-500/20 text-teal-400'
-                      }`}
-                    >
-                      {skill.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Certifications */}
-            {formData.certifications && formData.certifications.length > 0 && (
-              <div className="mb-6">
-                <h2 className={`mb-3 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Certifications
-                </h2>
-                <div className="space-y-3">
-                  {formData.certifications.map((cert: any) => (
-                    <div key={cert.id}>
-                      <h3 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                        {cert.name}
-                      </h3>
-                      <p className={`text-sm ${theme === 'light' ? 'text-gray-700' : 'text-gray-300'}`}>
-                        {cert.issuer} {cert.year && `• ${cert.year}`}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Languages */}
-            {formData.languages && formData.languages.length > 0 && (
-              <div className="mb-6">
-                <h2 className={`mb-3 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Languages
-                </h2>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {formData.languages.map((lang: any) => (
-                    <div key={lang.id}>
-                      <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                        {lang.name}
-                      </p>
-                      <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                        {lang.proficiency}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Awards */}
-            {formData.awards && formData.awards.length > 0 && (
-              <div className="mb-6">
-                <h2 className={`mb-3 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Awards & Achievements
-                </h2>
-                <div className="space-y-3">
-                  {formData.awards.map((award: any) => (
-                    <div key={award.id}>
-                      <h3 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                        {award.title}
-                      </h3>
-                      <p className={`text-sm ${theme === 'light' ? 'text-gray-700' : 'text-gray-300'}`}>
-                        {award.issuer} {award.year && `• ${award.year}`}
-                      </p>
-                      {award.description && (
-                        <p className={`text-sm mt-1 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                          {award.description}
-                        </p>
+              {/* PROJECTS */}
+              {formData.projects.length > 0 && (
+                <section className="mb-2">
+                  <h2 className="font-semibold tracking-wide text-[13px] mb-2">
+                    PROJECTS
+                  </h2>
+                  {formData.projects.map((proj) => (
+                    <div key={proj.id} className="mb-3 text-[12px]">
+                      <p className="font-semibold">{proj.name}</p>
+                      {proj.description && (
+                        <p className="text-gray-800">{proj.description}</p>
                       )}
                     </div>
                   ))}
-                </div>
-              </div>
-            )}
-
-            {/* Projects */}
-            {formData.projects && formData.projects.length > 0 && (
-              <div className="mb-6">
-                <h2 className={`mb-3 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Projects
-                </h2>
-                <div className="space-y-4">
-                  {formData.projects.map((project: any) => (
-                    <div key={project.id}>
-                      <h3 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                        {project.name}
-                      </h3>
-                      {project.description && (
-                        <p className={`text-sm mt-1 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                          {project.description}
-                        </p>
-                      )}
-                      {project.url && (
-                        <a
-                          href={project.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm text-teal-500 hover:text-teal-400 mt-1 inline-block"
-                        >
-                          View Project →
-                        </a>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </CardContent>
+                </section>
+              )}
+            </div>
+          </div>
         </Card>
       </div>
     </div>
   );
-}
+};

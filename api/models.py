@@ -1,10 +1,11 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
-from django.core.validators import RegexValidator
+from django.core.validators import RegexValidator, MinValueValidator, MaxValueValidator
 import qrcode
 from io import BytesIO
 from django.core.files import File
 from PIL import Image
+
 
 class User(AbstractUser):
     """Extended User model for both students and admins"""
@@ -12,13 +13,13 @@ class User(AbstractUser):
         ('student', 'Student'),
         ('admin', 'Admin'),
     )
-    
+
     user_type = models.CharField(max_length=10, choices=USER_TYPE_CHOICES, default='student')
     phone = models.CharField(max_length=20, blank=True, null=True)
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'users'
         ordering = ['-created_at']
@@ -35,32 +36,32 @@ class StudentProfile(models.Model):
         ('3', '3rd Year'),
         ('4', '4th Year'),
     )
-    
+
     STATUS_CHOICES = (
         ('active', 'Active'),
         ('inactive', 'Inactive'),
         ('suspended', 'Suspended'),
     )
-    
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
     student_id = models.CharField(max_length=20, unique=True)
     program = models.CharField(max_length=255, default='Bachelor of Media & Communication')
     year = models.CharField(max_length=1, choices=YEAR_CHOICES)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     bio = models.TextField(blank=True, null=True)
-    
+
     # Statistics (denormalized for performance)
     total_bookings = models.IntegerField(default=0)
     active_rentals = models.IntegerField(default=0)
     tutorials_watched = models.IntegerField(default=0)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'student_profiles'
         ordering = ['student_id']
-    
+
     def __str__(self):
         return f"{self.student_id} - {self.user.get_full_name()}"
 
@@ -71,20 +72,20 @@ class AdminProfile(models.Model):
         ('active', 'Active'),
         ('inactive', 'Inactive'),
     )
-    
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='admin_profile')
     admin_id = models.CharField(max_length=20, unique=True)
     role = models.CharField(max_length=100)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     department = models.CharField(max_length=100, blank=True, null=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
+    updated_at = models.DateTimeField(auto_now_add=True)
+
     class Meta:
         db_table = 'admin_profiles'
         ordering = ['admin_id']
-    
+
     def __str__(self):
         return f"{self.admin_id} - {self.user.get_full_name()}"
 
@@ -95,12 +96,12 @@ class Category(models.Model):
     description = models.TextField(blank=True, null=True)
     color = models.CharField(max_length=7, default='#3B82F6')  # Hex color code
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         db_table = 'categories'
         verbose_name_plural = 'Categories'
         ordering = ['name']
-    
+
     def __str__(self):
         return self.name
 
@@ -112,7 +113,7 @@ class Tutorial(models.Model):
         ('intermediate', 'Intermediate'),
         ('advanced', 'Advanced'),
     )
-    
+
     title = models.CharField(max_length=255)
     description = models.TextField()
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, related_name='tutorials')
@@ -125,11 +126,11 @@ class Tutorial(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_tutorials')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'tutorials'
         ordering = ['-created_at']
-    
+
     def __str__(self):
         return self.title
 
@@ -141,12 +142,12 @@ class TutorialProgress(models.Model):
     completed = models.BooleanField(default=False)
     progress_percentage = models.IntegerField(default=0)  # 0-100
     last_watched_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'tutorial_progress'
         unique_together = ('student', 'tutorial')
         ordering = ['-last_watched_at']
-    
+
     def __str__(self):
         return f"{self.student.username} - {self.tutorial.title} ({self.progress_percentage}%)"
 
@@ -161,17 +162,17 @@ class Lab(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'labs'
         ordering = ['name']
-    
+
     def __str__(self):
         return self.name
 
 
 class LabBooking(models.Model):
-    """Lab booking requests"""
+    """Lab booking requests (BMC Lab iMac booking)"""
     STATUS_CHOICES = (
         ('pending', 'Pending'),
         ('approved', 'Approved'),
@@ -179,30 +180,61 @@ class LabBooking(models.Model):
         ('cancelled', 'Cancelled'),
         ('completed', 'Completed'),
     )
-    
+
     lab = models.ForeignKey(Lab, on_delete=models.CASCADE, related_name='bookings')
     student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='lab_bookings')
+
+    # Date & time
     booking_date = models.DateField()
     start_time = models.TimeField()
     end_time = models.TimeField()
+
+    # Frontend-friendly label for timeslot (e.g. "09:00-11:00")
+    time_slot = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text='Time slot label, e.g. "09:00-11:00"',
+    )
+
+    # Specific iMac in BMC Lab (1–30)
+    imac_number = models.PositiveSmallIntegerField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(1), MaxValueValidator(30)],
+        help_text='Specific iMac number (1–30)',
+    )
+
     purpose = models.TextField()
     participants = models.IntegerField(default=1)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    
+
     # Admin review
-    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_bookings')
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_bookings'
+    )
     reviewed_at = models.DateTimeField(null=True, blank=True)
     admin_comment = models.TextField(blank=True, null=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'lab_bookings'
         ordering = ['-booking_date', '-start_time']
-    
+        indexes = [
+            # For checking if a specific iMac is already booked in a slot
+            models.Index(fields=['lab', 'booking_date', 'time_slot', 'imac_number']),
+            # For checking if a student already has a booking in that slot
+            models.Index(fields=['student', 'booking_date', 'time_slot']),
+        ]
+
     def __str__(self):
-        return f"{self.lab.name} - {self.student.username} - {self.booking_date}"
+        return f"{self.lab.name} - {self.student.username} - {self.booking_date} - iMac {self.imac_number}"
 
 
 class Equipment(models.Model):
@@ -214,14 +246,14 @@ class Equipment(models.Model):
         ('accessories', 'Accessories'),
         ('other', 'Other'),
     )
-    
+
     STATUS_CHOICES = (
         ('available', 'Available'),
         ('rented', 'Rented'),
         ('maintenance', 'Maintenance'),
         ('damaged', 'Damaged'),
     )
-    
+
     name = models.CharField(max_length=255)
     description = models.TextField()
     category = models.CharField(max_length=50, choices=CATEGORY_CHOICES)
@@ -232,31 +264,31 @@ class Equipment(models.Model):
     quantity_total = models.IntegerField(default=1)
     quantity_available = models.IntegerField(default=1)
     is_active = models.BooleanField(default=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'equipment'
         ordering = ['name']
-    
+
     def __str__(self):
         return f"{self.name} ({self.equipment_id})"
-    
+
     def save(self, *args, **kwargs):
         # Generate QR code if it doesn't exist
         if not self.qr_code and self.equipment_id:
             qr = qrcode.QRCode(version=1, box_size=10, border=5)
             qr.add_data(self.equipment_id)
             qr.make(fit=True)
-            
+
             img = qr.make_image(fill_color="black", back_color="white")
             buffer = BytesIO()
             img.save(buffer, format='PNG')
-            
+
             file_name = f'qr_{self.equipment_id}.png'
             self.qr_code.save(file_name, File(buffer), save=False)
-        
+
         super().save(*args, **kwargs)
 
 
@@ -268,7 +300,7 @@ class EquipmentRental(models.Model):
         ('overdue', 'Overdue'),
         ('damaged', 'Damaged'),
     )
-    
+
     equipment = models.ForeignKey(Equipment, on_delete=models.CASCADE, related_name='rentals')
     student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='equipment_rentals')
     rental_date = models.DateTimeField()
@@ -276,18 +308,29 @@ class EquipmentRental(models.Model):
     actual_return_date = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     notes = models.TextField(blank=True, null=True)
-    
+
     # Checked by admin
-    issued_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='issued_rentals')
-    returned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='received_returns')
-    
+    issued_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='issued_rentals'
+    )
+    returned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='received_returns'
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
+    updated_at = models.DateTimeField(auto_now_add=True)
+
     class Meta:
         db_table = 'equipment_rentals'
         ordering = ['-rental_date']
-    
+
     def __str__(self):
         return f"{self.equipment.name} - {self.student.username}"
 
@@ -301,40 +344,45 @@ class CV(models.Model):
         ('needs-changes', 'Needs Changes'),
         ('flagged', 'Flagged'),
     )
-    
+
     student = models.OneToOneField(User, on_delete=models.CASCADE, related_name='cv')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    
-    # --- ADDED: Profile Image for CV ---
+
+    # Profile Image for CV
     profile_image = models.ImageField(upload_to='cv_photos/', null=True, blank=True)
-    
+
     # Personal Information
     full_name = models.CharField(max_length=255)
     title = models.CharField(max_length=255, blank=True, null=True)
     summary = models.TextField(blank=True, null=True)
-    
+
     # Contact
     email = models.EmailField()
     phone = models.CharField(max_length=20)
     location = models.CharField(max_length=255, blank=True, null=True)
     linkedin = models.URLField(blank=True, null=True)
     portfolio_website = models.URLField(blank=True, null=True)
-    
+
     # Admin review
-    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_cvs')
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_cvs'
+    )
     reviewed_at = models.DateTimeField(null=True, blank=True)
     admin_comment = models.TextField(blank=True, null=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    
+    updated_at = models.DateTimeField(auto_now_add=True)
+
     class Meta:
         db_table = 'cvs'
         verbose_name = 'CV'
         verbose_name_plural = 'CVs'
         ordering = ['-updated_at']
-    
+
     def __str__(self):
         return f"CV - {self.student.username}"
 
@@ -344,15 +392,15 @@ class Education(models.Model):
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='education')
     degree = models.CharField(max_length=255)
     institution = models.CharField(max_length=255)
-    start_date = models.CharField(max_length=20)  # Store as string for flexibility (e.g., "2020" or "Jan 2020")
+    start_date = models.CharField(max_length=20)  # flexible string
     end_date = models.CharField(max_length=20)
     description = models.TextField(blank=True, null=True)
     order = models.IntegerField(default=0)
-    
+
     class Meta:
         db_table = 'cv_education'
         ordering = ['order', '-start_date']
-    
+
     def __str__(self):
         return f"{self.degree} at {self.institution}"
 
@@ -366,11 +414,11 @@ class Experience(models.Model):
     end_date = models.CharField(max_length=20)
     description = models.TextField(blank=True, null=True)
     order = models.IntegerField(default=0)
-    
+
     class Meta:
         db_table = 'cv_experience'
         ordering = ['order', '-start_date']
-    
+
     def __str__(self):
         return f"{self.position} at {self.company}"
 
@@ -383,11 +431,11 @@ class Project(models.Model):
     technologies = models.TextField(blank=True, null=True)
     url = models.URLField(blank=True, null=True)
     order = models.IntegerField(default=0)
-    
+
     class Meta:
         db_table = 'cv_projects'
         ordering = ['order']
-    
+
     def __str__(self):
         return self.name
 
@@ -400,11 +448,11 @@ class Certification(models.Model):
     year = models.CharField(max_length=20)
     credential_url = models.URLField(blank=True, null=True)
     order = models.IntegerField(default=0)
-    
+
     class Meta:
         db_table = 'cv_certifications'
         ordering = ['order', '-year']
-    
+
     def __str__(self):
         return self.name
 
@@ -417,11 +465,11 @@ class Involvement(models.Model):
     year = models.CharField(max_length=50)
     description = models.TextField(blank=True, null=True)
     order = models.IntegerField(default=0)
-    
+
     class Meta:
         db_table = 'cv_involvement'
         ordering = ['order', '-year']
-    
+
     def __str__(self):
         return f"{self.role} - {self.organization}"
 
@@ -431,11 +479,11 @@ class Skill(models.Model):
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='skills')
     name = models.CharField(max_length=100)
     order = models.IntegerField(default=0)
-    
+
     class Meta:
         db_table = 'cv_skills'
         ordering = ['order']
-    
+
     def __str__(self):
         return self.name
 
@@ -449,10 +497,44 @@ class Reference(models.Model):
     phone = models.CharField(max_length=20)
     email = models.EmailField()
     order = models.IntegerField(default=0)
-    
+
     class Meta:
         db_table = 'cv_references'
         ordering = ['order']
-    
+
     def __str__(self):
         return self.name
+
+
+# ========= NEW MODELS FOR LANGUAGES & AWARDS =========
+
+class Language(models.Model):
+    """CV Languages"""
+    cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='languages')
+    name = models.CharField(max_length=100)          # e.g. "English"
+    proficiency = models.CharField(max_length=50)    # e.g. "Fluent"
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'cv_languages'
+        ordering = ['order', 'name']
+
+    def __str__(self):
+        return f"{self.name} ({self.proficiency})"
+
+
+class Award(models.Model):
+    """CV Awards & Honours"""
+    cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='awards')
+    title = models.CharField(max_length=255)          # Award title
+    issuer = models.CharField(max_length=255, blank=True, null=True)  # Who gave it
+    year = models.CharField(max_length=20, blank=True, null=True)     # You used 'date' in UI, keep year here
+    description = models.TextField(blank=True, null=True)
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'cv_awards'
+        ordering = ['order', '-year']
+
+    def __str__(self):
+        return self.title

@@ -12,42 +12,37 @@ interface LoginPageProps {
   onNavigate: (page: string) => void;
 }
 
+const isAdminUser = (u: any) => {
+  const role = String(u?.role || '').toLowerCase();
+  return role.includes('admin') || u?.user_type === 'admin' || u?.is_staff === true;
+};
+
 export function LoginPage({ onNavigate }: LoginPageProps) {
   const { theme, toggleTheme } = useTheme();
-  
-  // Form Input State
+
   const [studentEmail, setStudentEmail] = useState('');
   const [studentPassword, setStudentPassword] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
 
-  // UI State
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Unified Login Handler logic
   const performLogin = async (username: string, pass: string) => {
     setError(null);
     setLoading(true);
 
     try {
-      // 1. Call Backend to get Tokens
       await authService.login(username, pass);
 
-      // 2. Fetch Profile to confirm Role (Security Check)
-      // This ensures even if a student logs in via Admin tab, they get sent to Student Dashboard
-      const profile = await authService.getProfile();
+      const user = authService.getUser();
+      const admin = isAdminUser(user);
 
-      // 3. Redirect based on backend role
-      if (profile.is_staff) {
-        onNavigate('admin-dashboard');
-      } else {
-        onNavigate('student-dashboard');
-      }
+      if (admin) onNavigate('admin-dashboard');
+      else onNavigate('student-dashboard');
     } catch (err: any) {
       console.error('Login error:', err);
-      // Handle 401 Unauthorized specifically
-      if (err.response && err.response.status === 401) {
+      if (err?.response && err.response.status === 401) {
         setError('Invalid email or password.');
       } else {
         setError('Unable to connect to server. Is the backend running?');
@@ -69,7 +64,6 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 flex items-center justify-center p-6">
-      {/* Theme Toggle */}
       <div className="absolute top-6 right-6 z-10">
         <Button
           variant="ghost"
@@ -81,14 +75,12 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
         </Button>
       </div>
 
-      {/* Background decoration */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-teal-500/10 rounded-full blur-3xl" />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl" />
       </div>
 
       <div className="w-full max-w-md relative">
-        {/* Logo */}
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-2 mb-4">
             <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500 to-cyan-500">
@@ -99,7 +91,6 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
           <p className="text-gray-400">Bachelor of Media & Communication</p>
         </div>
 
-        {/* Error Alert Display */}
         {error && (
           <div className="mb-4 p-3 rounded-md bg-red-500/10 border border-red-500/20 flex items-center gap-2 text-red-400 text-sm">
             <AlertCircle className="h-4 w-4" />
@@ -107,17 +98,16 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
           </div>
         )}
 
-        {/* Login Tabs */}
         <Tabs defaultValue="student" className="w-full">
           <TabsList className="grid w-full grid-cols-2 bg-gray-900/50 border border-gray-800">
-            <TabsTrigger 
+            <TabsTrigger
               value="student"
               className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-teal-500 data-[state=active]:to-cyan-500 data-[state=active]:text-white"
             >
               <User className="h-4 w-4 mr-2" />
               Student
             </TabsTrigger>
-            <TabsTrigger 
+            <TabsTrigger
               value="admin"
               className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-teal-500 data-[state=active]:to-cyan-500 data-[state=active]:text-white"
             >
@@ -142,7 +132,7 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
                     </Label>
                     <Input
                       id="student-email"
-                      type="text" 
+                      type="text"
                       placeholder="student@aiu.edu.my"
                       value={studentEmail}
                       onChange={(e) => setStudentEmail(e.target.value)}
@@ -151,6 +141,7 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
                       disabled={loading}
                     />
                   </div>
+
                   <div className="space-y-2">
                     <Label htmlFor="student-password" className="text-gray-300">
                       Password
@@ -166,28 +157,22 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
                       disabled={loading}
                     />
                   </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <button
-                      type="button"
-                      className="text-teal-400 hover:text-teal-300 transition-colors"
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
+
                   <Button
                     type="submit"
                     disabled={loading}
                     className="w-full bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
                   >
                     {loading ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Logging in...
-                        </>
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Logging in...
+                      </>
                     ) : (
-                        'Login to Dashboard'
+                      'Login to Dashboard'
                     )}
                   </Button>
+
                   <div className="text-center text-sm text-gray-400">
                     Don't have an account?{' '}
                     <button
@@ -228,6 +213,7 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
                       disabled={loading}
                     />
                   </div>
+
                   <div className="space-y-2">
                     <Label htmlFor="admin-password" className="text-gray-300">
                       Password
@@ -243,18 +229,19 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
                       disabled={loading}
                     />
                   </div>
+
                   <Button
                     type="submit"
                     disabled={loading}
                     className="w-full bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
                   >
-                     {loading ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Verifying...
-                        </>
+                    {loading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Verifying...
+                      </>
                     ) : (
-                        'Login to Admin Panel'
+                      'Login to Admin Panel'
                     )}
                   </Button>
                 </form>
@@ -263,7 +250,6 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
           </TabsContent>
         </Tabs>
 
-        {/* Back to Home */}
         <div className="text-center mt-6">
           <button
             onClick={() => onNavigate('landing')}
