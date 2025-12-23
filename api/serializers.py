@@ -106,15 +106,10 @@ class TutorialSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Tutorial
-        # Using __all__ is fine, but video_url is our priority for YouTube
         fields = '__all__'
         read_only_fields = ['views', 'created_by', 'created_at', 'updated_at']
 
     def validate_video_url(self, value):
-        """
-        Ensure the URL is a valid link. 
-        Note: You could add regex here to enforce youtube.com/watch?v= if needed.
-        """
         if not value:
             raise serializers.ValidationError("A video URL is required for YouTube tutorials.")
         if not value.startswith(('http://', 'https://')):
@@ -122,23 +117,18 @@ class TutorialSerializer(serializers.ModelSerializer):
         return value
 
     def validate_duration(self, value):
-        """
-        Converts any incoming value to an integer representing minutes.
-        """
         try:
             return int(value)
         except (ValueError, TypeError):
             raise serializers.ValidationError("Duration must be a number (minutes).")
 
     def create(self, validated_data):
-        """
-        Automatically link the tutorial to the logged-in admin.
-        """
         request = self.context.get('request')
         if request and hasattr(request, 'user'):
             validated_data['created_by'] = request.user
         return super().create(validated_data)
 
+# ✅ PROGRESS FIXES
 class TutorialProgressSerializer(serializers.ModelSerializer):
     tutorial_title = serializers.CharField(source='tutorial.title', read_only=True)
 
@@ -146,6 +136,61 @@ class TutorialProgressSerializer(serializers.ModelSerializer):
         model = TutorialProgress
         fields = '__all__'
         read_only_fields = ['student']
+
+    def validate_progress_percentage(self, value):
+        """
+        Ensure 0-100 range.
+        """
+        try:
+            v = int(value)
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("Progress percentage must be a number.")
+        if v < 0 or v > 100:
+            raise serializers.ValidationError("Progress percentage must be between 0 and 100.")
+        return v
+
+    def validate(self, attrs):
+        """
+        Auto-complete rules:
+        - if completed True => force progress to 100
+        - if progress >= 95 => completed True (adjust threshold if you want)
+        """
+        progress = attrs.get('progress_percentage', None)
+        completed = attrs.get('completed', None)
+
+        # Normalize progress if present
+        if progress is not None:
+            try:
+                progress = int(progress)
+            except (ValueError, TypeError):
+                raise serializers.ValidationError({"progress_percentage": "Progress percentage must be a number."})
+
+        # If client marks completed, force 100%
+        if completed is True:
+            attrs['progress_percentage'] = 100
+
+        # If progress indicates near-finish, mark completed
+        if progress is not None and progress >= 95:
+            attrs['completed'] = True
+            attrs['progress_percentage'] = 100
+
+        return attrs
+
+    def create(self, validated_data):
+        """
+        Always bind progress to logged-in student (JWT).
+        """
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and request.user and request.user.is_authenticated:
+            validated_data['student'] = request.user
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        """
+        Prevent changing student via API and keep same auto-complete behavior.
+        """
+        validated_data.pop('student', None)
+        return super().update(instance, validated_data)
 
 class LabSerializer(serializers.ModelSerializer):
     facilities_list = serializers.SerializerMethodField()

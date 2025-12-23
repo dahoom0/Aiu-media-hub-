@@ -16,6 +16,7 @@ import {
 
 import adminService from '../services/adminService';
 import equipmentAdminService from '../services/equipmentAdmin';
+import labAdminService from '../services/labAdminService';
 
 interface AdminDashboardProps {
   onNavigate: (page: string) => void;
@@ -130,10 +131,51 @@ function safeTime(t?: string) {
   return d.toLocaleString();
 }
 
+// ✅ Parses "HH:MM-HH:MM" or "HH:MM - HH:MM" or with seconds
+function normalizeTimeSlot(slot?: string) {
+  if (!slot) return null;
+  const s = String(slot).trim();
+  const parts = s.includes('-') ? s.split('-') : s.split('–');
+  if (parts.length !== 2) return null;
+
+  const clean = (t: string) => t.trim().slice(0, 5); // HH:MM from HH:MM:SS
+  const start = clean(parts[0]);
+  const end = clean(parts[1]);
+  if (start.length !== 5 || end.length !== 5) return null;
+
+  return { start, end };
+}
+
+// ✅ Booking is "in use right now" if approved + today + current time within timeslot
+function isActiveNow(booking: LabBooking) {
+  const status = safeStatus(booking.status);
+  if (status !== 'approved') return false;
+
+  const dateStr = booking.booking_date || booking.date;
+  if (!dateStr) return false;
+
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  if (dateStr !== todayStr) return false;
+
+  const slot = normalizeTimeSlot(booking.time_slot);
+  if (!slot) return false;
+
+  const [sh, sm] = slot.start.split(':').map(Number);
+  const [eh, em] = slot.end.split(':').map(Number);
+
+  const startMinutes = sh * 60 + sm;
+  const endMinutes = eh * 60 + em;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+  return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+}
+
 export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const [bookings, setBookings] = useState<LabBooking[]>([]);
   const [rentals, setRentals] = useState<EquipmentRental[]>([]);
   const [cvs, setCvs] = useState<CVItem[]>([]);
+  const [labs, setLabs] = useState<any[]>([]);
 
   const [statsData, setStatsData] = useState<DashboardStats>({
     totalStudents: 0,
@@ -221,17 +263,19 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     setError(null);
 
     try {
-      const [bookingsRes, rentalsRes, cvsRes, dashboardStats] = await Promise.all([
+      const [bookingsRes, rentalsRes, cvsRes, dashboardStats, labsRes] = await Promise.all([
         adminService.getAllBookings(),
         adminService.getAllRentals(),
         adminService.getAllCVs(),
         adminService.getDashboardStats(),
+        labAdminService.getLabs(),
       ]);
 
       setBookings(normalizeList(bookingsRes) as LabBooking[]);
       setRentals(normalizeList(rentalsRes) as EquipmentRental[]);
       setCvs(normalizeList(cvsRes) as CVItem[]);
       setStatsData(dashboardStats);
+      setLabs(normalizeList(labsRes));
 
       // ✅ also fetch equipment counts
       await fetchEquipmentStats();
@@ -240,6 +284,7 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
       setBookings([]);
       setRentals([]);
       setCvs([]);
+      setLabs([]);
       setStatsData({
         totalStudents: 0,
         pendingBookings: 0,
@@ -482,6 +527,23 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     }
   };
 
+  // ✅ Real BMC Lab utilization numbers (NO UI change, only data)
+  const bmcUtil = useMemo(() => {
+    const bmc = labs.find(
+      (l) => String(l?.name || l?.lab_name || '').toLowerCase().trim() === 'bmc lab'
+    );
+
+    const total = Number(bmc?.pc_count ?? bmc?.pcCount ?? bmc?.pc_total ?? 0);
+    const inUse = bookings.filter((b) => {
+      const labName = String(b.lab_room || '').toLowerCase().trim();
+      return labName === 'bmc lab' && isActiveNow(b);
+    }).length;
+
+    const percent = total > 0 ? Math.round((inUse / total) * 100) : 0;
+
+    return { total, inUse, percent };
+  }, [labs, bookings]);
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -679,27 +741,28 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
           </CardContent>
         </Card>
 
+        {/* ✅ Lab Utilization (REAL DATA, same UI style/classes) */}
         <Card className="bg-gray-900/50 border-gray-800">
           <CardHeader>
             <CardTitle className="text-white">Lab Utilization</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Studio A</span>
+              <span className="text-gray-400">BMC Lab</span>
               <Badge className="bg-teal-500/20 text-teal-400 border-teal-500/50">
-                85%
+                {bmcUtil.total > 0 ? `${bmcUtil.inUse}/${bmcUtil.total} in use` : `${bmcUtil.inUse} in use`}
               </Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Studio B</span>
+              <span className="text-gray-400">Utilization</span>
               <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/50">
-                72%
+                {bmcUtil.total > 0 ? `${bmcUtil.percent}%` : '—'}
               </Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Editing Rooms</span>
+              <span className="text-gray-400">Active right now</span>
               <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/50">
-                68%
+                {bmcUtil.inUse}
               </Badge>
             </div>
           </CardContent>

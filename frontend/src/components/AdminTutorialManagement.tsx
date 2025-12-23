@@ -1,29 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { useEffect, useState } from 'react';
+import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Checkbox } from './ui/checkbox';
 import { useTheme } from './ThemeProvider';
-import {
-  Video,
-  Upload,
-  Link,
-  Youtube,
-  Edit,
-  Trash2,
-  Eye,
-  ChevronRight,
-  Image as ImageIcon
-} from 'lucide-react';
+import { Upload, Link, Youtube, Edit, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-// Import the admin-specific service
 import tutorialAdminService from '../services/tutorialAdminService';
 
 interface TutorialRow {
@@ -33,14 +22,22 @@ interface TutorialRow {
   views: number;
   dateAdded: string;
   status: 'active' | 'draft' | 'archived' | string;
-  source: string; 
+  source: string;
   linkedEquipment?: string[];
 }
 
 interface Equipment {
-  id: string;
-  name: string;
-  category: string;
+  id: number | string;
+  name?: string;
+  category?: any;
+  type?: string;
+  title?: string;
+}
+
+interface Category {
+  id: number | string;
+  name?: string;
+  title?: string;
 }
 
 const safeDate = (v: any) => {
@@ -54,46 +51,116 @@ const safeDate = (v: any) => {
   }
 };
 
+const unwrapList = (data: any) => {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.results)) return data.results;
+  return [];
+};
+
+const getCategoryLabel = (c: any) => c?.name || c?.title || `Category #${c?.id ?? ''}`;
+const getEquipmentLabel = (e: any) => e?.name || e?.title || `Equipment #${e?.id ?? ''}`;
+
+const getEquipmentBadge = (e: any) => {
+  if (typeof e?.type === 'string' && e.type.trim()) return e.type;
+  const cat = e?.category;
+  if (typeof cat === 'string' && cat.trim()) return cat;
+  if (typeof cat === 'number') return `Category ${cat}`;
+  if (typeof cat === 'object' && cat) return cat?.name || cat?.title || (cat?.id ? `Category ${cat.id}` : 'Equipment');
+  return 'Equipment';
+};
+
+const levelToUi = (v: any): 'Beginner' | 'Intermediate' | 'Advanced' => {
+  const s = String(v || '').trim();
+  const low = s.toLowerCase();
+  if (low === 'beginner') return 'Beginner';
+  if (low === 'intermediate') return 'Intermediate';
+  if (low === 'advanced') return 'Advanced';
+  if (s === 'Beginner' || s === 'Intermediate' || s === 'Advanced') return s as any;
+  return 'Beginner';
+};
+
+const extractCategoryId = (t: any): string => {
+  // TutorialSerializer: category is FK id in API (usually number)
+  // But sometimes list endpoints return nested objects; handle both.
+  const c = t?.category;
+  if (typeof c === 'number' || typeof c === 'string') return String(c);
+  if (typeof c === 'object' && c?.id !== undefined && c?.id !== null) return String(c.id);
+  if (t?.category_id !== undefined && t?.category_id !== null) return String(t.category_id);
+  return '';
+};
+
+const extractEquipmentIds = (t: any): string[] => {
+  // Your backend naming can vary; try common keys.
+  const raw =
+    t?.equipment_ids ||
+    t?.equipments ||
+    t?.equipment ||
+    t?.related_equipments ||
+    t?.related_equipment_ids ||
+    t?.linked_equipments;
+
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x: any) => {
+        if (typeof x === 'number' || typeof x === 'string') return String(x);
+        if (typeof x === 'object' && x?.id !== undefined && x?.id !== null) return String(x.id);
+        return null;
+      })
+      .filter(Boolean) as string[];
+  }
+
+  return [];
+};
+
 export function AdminTutorialManagement() {
   const { theme } = useTheme();
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   const [uploadStep, setUploadStep] = useState<1 | 2 | 3>(1);
 
-  // Upload form state
+  // ✅ NEW: edit mode state (logic only)
+  const [editingTutorialId, setEditingTutorialId] = useState<string | number | null>(null);
+
+  // Upload form state (UI unchanged)
   const [sourceType, setSourceType] = useState<'drive' | 'youtube'>('youtube');
   const [tutorialTitle, setTutorialTitle] = useState('');
   const [tutorialDescription, setTutorialDescription] = useState('');
-  const [tutorialCategory, setTutorialCategory] = useState<'equipment' | 'general'>('general');
+
+  // Backend Category ID (NOT "general/equipment")
+  const [tutorialCategoryId, setTutorialCategoryId] = useState<string>('');
+
+  // ✅ Duration + Level (matches Django admin)
+  // UI shows "Beginner/Intermediate/Advanced" but service maps to backend choice values
+  const [tutorialDuration, setTutorialDuration] = useState<string>('0');
+  const [tutorialLevel, setTutorialLevel] = useState<'Beginner' | 'Intermediate' | 'Advanced'>('Beginner');
+
   const [selectedEquipment, setSelectedEquipment] = useState<string[]>([]);
   const [videoUrl, setVideoUrl] = useState('');
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
 
   // Backend data
   const [tutorials, setTutorials] = useState<TutorialRow[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [loading, setLoading] = useState(false);
-
-  // Mock equipment (Update this to fetch from your equipment service later)
-  const availableEquipment: Equipment[] = [
-    { id: '1', name: 'Sony A7S III', category: 'Camera' },
-    { id: '2', name: 'Canon EOS R5', category: 'Camera' },
-    { id: '3', name: 'LED Light Panel', category: 'Lighting' },
-    { id: '4', name: 'Rode NTG4+ Microphone', category: 'Audio' },
-  ];
+  const [loadingWizardData, setLoadingWizardData] = useState(false);
 
   const loadTutorials = async () => {
     setLoading(true);
     try {
-      const list = await tutorialAdminService.list();
+      const res = await tutorialAdminService.list();
+      const list = unwrapList(res);
+
       const mapped: TutorialRow[] = list.map((t: any) => ({
         id: t.id,
         title: t.title || 'Untitled',
-        category: t.category_display || t.category || 'General',
+        category: t.category_name || t.category_display || t.category || 'General',
         views: Number(t.views) || 0,
-        dateAdded: safeDate(t.created_at || t.date_added),
+        dateAdded: safeDate(t.created_at || t.date_added || t.createdAt),
         status: t.is_active ? 'active' : 'draft',
         source: t.video_url?.includes('youtube') ? 'youtube' : 'link',
-        linkedEquipment: t.related_equipment_names || [],
+        linkedEquipment: t.related_equipment_names || t.linked_equipment_names || [],
       }));
+
       setTutorials(mapped);
     } catch (e: any) {
       toast.error('Failed to load tutorials');
@@ -102,19 +169,98 @@ export function AdminTutorialManagement() {
     }
   };
 
+  const loadWizardData = async () => {
+    setLoadingWizardData(true);
+    try {
+      const [cats, eqs] = await Promise.all([
+        tutorialAdminService.listCategories(),
+        tutorialAdminService.listEquipments(),
+      ]);
+
+      setCategories(cats);
+      setEquipments(eqs);
+
+      if (!tutorialCategoryId && cats?.length) {
+        setTutorialCategoryId(String(cats[0].id));
+      }
+    } catch (err) {
+      console.error('Failed to load categories/equipments:', err);
+      toast.error('Failed to load categories/equipment from backend');
+    } finally {
+      setLoadingWizardData(false);
+    }
+  };
+
   useEffect(() => {
     loadTutorials();
   }, []);
 
+  useEffect(() => {
+    if (isUploadDialogOpen) {
+      loadWizardData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isUploadDialogOpen]);
+
   const resetUploadForm = () => {
+    setEditingTutorialId(null);
     setUploadStep(1);
     setSourceType('youtube');
     setTutorialTitle('');
     setTutorialDescription('');
-    setTutorialCategory('general');
+    setTutorialCategoryId(categories?.[0]?.id ? String(categories[0].id) : '');
+    setTutorialDuration('0');
+    setTutorialLevel('Beginner');
     setSelectedEquipment([]);
     setVideoUrl('');
     setThumbnailFile(null);
+  };
+
+  const handleEdit = async (id: string | number) => {
+    try {
+      setLoading(true);
+
+      // Open dialog + switch to edit mode
+      setEditingTutorialId(id);
+      setIsUploadDialogOpen(true);
+
+      // Start at Details step for editing (admin-like behavior)
+      setUploadStep(2);
+
+      // Ensure categories/equipments are loaded for dropdown + checklist
+      await loadWizardData();
+
+      // Fetch full tutorial details for prefill
+      const detail = await tutorialAdminService.getById(id);
+
+      setTutorialTitle(detail?.title || '');
+      setTutorialDescription(detail?.description || '');
+      setVideoUrl(detail?.video_url || '');
+
+      const cid = extractCategoryId(detail);
+      if (cid) setTutorialCategoryId(cid);
+
+      const dur = detail?.duration;
+      setTutorialDuration(
+        dur === null || dur === undefined || dur === '' ? '0' : String(Number(dur))
+      );
+
+      setTutorialLevel(levelToUi(detail?.level));
+
+      setSelectedEquipment(extractEquipmentIds(detail));
+
+      // Important: do NOT set thumbnailFile when editing existing tutorial unless user picks a new file.
+      // Keep as null so update will send JSON unless user selects a new file.
+      setThumbnailFile(null);
+    } catch (e: any) {
+      console.error('Edit prefill failed:', e?.response?.data || e);
+      toast.error('Failed to load tutorial for editing');
+      // If we fail, exit edit mode safely
+      setEditingTutorialId(null);
+      setIsUploadDialogOpen(false);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleUploadSubmit = async () => {
@@ -128,40 +274,55 @@ export function AdminTutorialManagement() {
       return;
     }
 
-    // Step 2 Validation: Details
+    // Step 2 Validation
     if (uploadStep === 2) {
       if (!tutorialTitle || !tutorialDescription) {
         toast.error('Title and Description are required');
         return;
       }
-      if (tutorialCategory === 'equipment') {
-        setUploadStep(3);
+      if (!tutorialCategoryId) {
+        toast.error('Please select a category');
         return;
       }
+      const dur = Number(tutorialDuration);
+      if (!Number.isFinite(dur) || dur <= 0) {
+        toast.error('Please enter a valid duration (minutes)');
+        return;
+      }
+      // Step 3 optional in your flow
     }
 
-    // Final Submission (either from Step 2 for general or Step 3 for equipment)
+    // Final Submission (Create or Edit)
     try {
       setLoading(true);
-      
+
       const payload = {
         title: tutorialTitle,
         description: tutorialDescription,
-        category: tutorialCategory, // Ensure this matches your backend Category IDs/Slugs
-        videoUrl: videoUrl,
+        categoryId: tutorialCategoryId, // service maps -> category
+        videoUrl: videoUrl, // service maps -> video_url
+        duration: tutorialDuration,
+        level: tutorialLevel,
         thumbnail: thumbnailFile,
-        linkedEquipmentIds: selectedEquipment,
+        equipmentIds: selectedEquipment.map((id) => Number(id)).filter((n) => Number.isFinite(n)),
         is_active: true,
-        duration: 0, // Could add a field for this in Step 2
       };
 
-      await tutorialAdminService.create(payload);
-      toast.success('Tutorial published successfully!');
+      if (editingTutorialId !== null && editingTutorialId !== undefined) {
+        await tutorialAdminService.update(editingTutorialId, payload);
+        toast.success('Tutorial updated successfully!');
+      } else {
+        await tutorialAdminService.create(payload);
+        toast.success('Tutorial published successfully!');
+      }
+
       resetUploadForm();
       setIsUploadDialogOpen(false);
       await loadTutorials();
     } catch (e: any) {
-      toast.error(e.message || 'Failed to upload tutorial');
+      const data = e?.response?.data;
+      console.error('Submit error:', data || e);
+      toast.error(data ? JSON.stringify(data) : (e.message || 'Failed to submit tutorial'));
     } finally {
       setLoading(false);
     }
@@ -185,8 +346,12 @@ export function AdminTutorialManagement() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className={theme === 'light' ? 'text-2xl font-bold text-gray-900' : 'text-2xl font-bold text-white'}>Tutorial Management</h1>
-          <p className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>Create and manage external video tutorials</p>
+          <h1 className={theme === 'light' ? 'text-2xl font-bold text-gray-900' : 'text-2xl font-bold text-white'}>
+            Tutorial Management
+          </h1>
+          <p className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+            Create and manage external video tutorials
+          </p>
         </div>
 
         <Dialog open={isUploadDialogOpen} onOpenChange={setIsUploadDialogOpen}>
@@ -198,7 +363,9 @@ export function AdminTutorialManagement() {
 
           <DialogContent className={`max-w-2xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
             <DialogHeader>
-              <DialogTitle>Step {uploadStep}: {uploadStep === 1 ? 'Source' : uploadStep === 2 ? 'Details' : 'Link Equipment'}</DialogTitle>
+              <DialogTitle>
+                Step {uploadStep}: {uploadStep === 1 ? 'Source' : uploadStep === 2 ? 'Details' : 'Link Equipment'}
+              </DialogTitle>
             </DialogHeader>
 
             <div className="space-y-4 py-4">
@@ -206,14 +373,14 @@ export function AdminTutorialManagement() {
               {uploadStep === 1 && (
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
-                    <Button 
+                    <Button
                       variant={sourceType === 'youtube' ? 'default' : 'outline'}
                       onClick={() => setSourceType('youtube')}
                       className="h-20 flex flex-col gap-2"
                     >
                       <Youtube className="h-6 w-6" /> YouTube
                     </Button>
-                    <Button 
+                    <Button
                       variant={sourceType === 'drive' ? 'default' : 'outline'}
                       onClick={() => setSourceType('drive')}
                       className="h-20 flex flex-col gap-2"
@@ -223,10 +390,10 @@ export function AdminTutorialManagement() {
                   </div>
                   <div className="space-y-2">
                     <Label>Video URL</Label>
-                    <Input 
-                      placeholder="https://..." 
-                      value={videoUrl} 
-                      onChange={(e) => setVideoUrl(e.target.value)} 
+                    <Input
+                      placeholder="https://..."
+                      value={videoUrl}
+                      onChange={(e) => setVideoUrl(e.target.value)}
                       className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
                     />
                   </div>
@@ -240,24 +407,67 @@ export function AdminTutorialManagement() {
                     <Label>Title</Label>
                     <Input value={tutorialTitle} onChange={(e) => setTutorialTitle(e.target.value)} />
                   </div>
+
                   <div className="space-y-2">
                     <Label>Description</Label>
                     <Textarea value={tutorialDescription} onChange={(e) => setTutorialDescription(e.target.value)} rows={3} />
                   </div>
+
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Category</Label>
-                      <Select value={tutorialCategory} onValueChange={(v: any) => setTutorialCategory(v)}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                      <Select
+                        value={tutorialCategoryId}
+                        onValueChange={(v: any) => setTutorialCategoryId(v)}
+                        disabled={loadingWizardData}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={loadingWizardData ? 'Loading...' : 'Select category'} />
+                        </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="general">General</SelectItem>
-                          <SelectItem value="equipment">Equipment Specific</SelectItem>
+                          {categories.map((c: any) => (
+                            <SelectItem key={String(c.id)} value={String(c.id)}>
+                              {getCategoryLabel(c)}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
+
+                      <div className="text-xs opacity-70">
+                        Pick a real backend category (matches Django Admin).
+                      </div>
                     </div>
+
                     <div className="space-y-2">
                       <Label>Thumbnail (Optional)</Label>
                       <Input type="file" accept="image/*" onChange={(e) => setThumbnailFile(e.target.files?.[0] || null)} />
+                    </div>
+                  </div>
+
+                  {/* ✅ Duration + Level (same layout grid, no styling changes) */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Duration (minutes)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={tutorialDuration}
+                        onChange={(e) => setTutorialDuration(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Level</Label>
+                      <Select value={tutorialLevel} onValueChange={(v: any) => setTutorialLevel(v)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Beginner">Beginner</SelectItem>
+                          <SelectItem value="Intermediate">Intermediate</SelectItem>
+                          <SelectItem value="Advanced">Advanced</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
                 </div>
@@ -267,27 +477,49 @@ export function AdminTutorialManagement() {
               {uploadStep === 3 && (
                 <div className="space-y-4 max-h-60 overflow-y-auto">
                   <Label>Select Related Equipment</Label>
-                  {availableEquipment.map((eq) => (
-                    <div key={eq.id} className="flex items-center space-x-3 p-2 border rounded-md mb-2">
-                      <Checkbox 
-                        checked={selectedEquipment.includes(eq.id)} 
-                        onCheckedChange={() => {
-                          setSelectedEquipment(prev => prev.includes(eq.id) ? prev.filter(i => i !== eq.id) : [...prev, eq.id])
-                        }} 
-                      />
-                      <span>{eq.name} <Badge variant="secondary" className="ml-2">{eq.category}</Badge></span>
-                    </div>
-                  ))}
+
+                  {loadingWizardData ? (
+                    <div className="text-sm opacity-70">Loading equipments...</div>
+                  ) : (
+                    equipments.map((eq: any) => (
+                      <div key={String(eq.id)} className="flex items-center space-x-3 p-2 border rounded-md mb-2">
+                        <Checkbox
+                          checked={selectedEquipment.includes(String(eq.id))}
+                          onCheckedChange={() => {
+                            setSelectedEquipment((prev) =>
+                              prev.includes(String(eq.id))
+                                ? prev.filter((i) => i !== String(eq.id))
+                                : [...prev, String(eq.id)]
+                            );
+                          }}
+                        />
+                        <span>
+                          {getEquipmentLabel(eq)}{' '}
+                          <Badge variant="secondary" className="ml-2">
+                            {getEquipmentBadge(eq)}
+                          </Badge>
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
             </div>
 
             <div className="flex justify-between">
-              {uploadStep > 1 && <Button variant="ghost" onClick={() => setUploadStep(prev => (prev - 1) as any)}>Back</Button>}
+              {uploadStep > 1 && (
+                <Button variant="ghost" onClick={() => setUploadStep((prev) => (prev - 1) as any)}>
+                  Back
+                </Button>
+              )}
+
               <div className="flex gap-2 ml-auto">
-                <Button variant="outline" onClick={() => setIsUploadDialogOpen(false)}>Cancel</Button>
+                <Button variant="outline" onClick={() => setIsUploadDialogOpen(false)}>
+                  Cancel
+                </Button>
+
                 <Button onClick={handleUploadSubmit} disabled={loading}>
-                  {uploadStep === 3 || (uploadStep === 2 && tutorialCategory === 'general') ? 'Publish' : 'Next'}
+                  {uploadStep === 1 ? 'Next' : uploadStep === 3 ? 'Publish' : 'Publish'}
                 </Button>
               </div>
             </div>
@@ -307,21 +539,36 @@ export function AdminTutorialManagement() {
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
+
             <TableBody>
               {tutorials.map((t) => (
-                <TableRow key={t.id}>
+                <TableRow key={String(t.id)}>
                   <TableCell className="font-medium">{t.title}</TableCell>
-                  <TableCell><Badge variant="outline">{t.category}</Badge></TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{t.category}</Badge>
+                  </TableCell>
                   <TableCell>{t.views}</TableCell>
                   <TableCell>{t.dateAdded}</TableCell>
                   <TableCell>
                     <div className="flex gap-1">
-                      <Button size="icon" variant="ghost"><Edit className="h-4 w-4" /></Button>
-                      <Button size="icon" variant="ghost" className="text-red-500" onClick={() => handleDelete(t.id)}><Trash2 className="h-4 w-4" /></Button>
+                      <Button size="icon" variant="ghost" onClick={() => handleEdit(t.id)}>
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button size="icon" variant="ghost" className="text-red-500" onClick={() => handleDelete(t.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
               ))}
+
+              {tutorials.length === 0 && !loading && (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center opacity-70">
+                    No tutorials found.
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </CardContent>

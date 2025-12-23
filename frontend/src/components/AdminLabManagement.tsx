@@ -5,20 +5,11 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { useTheme } from './ThemeProvider';
-import {
-  Plus,
-  Edit,
-  Trash2,
-  Monitor,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  User,
-} from 'lucide-react';
+import { Plus, Edit, Trash2, CheckCircle2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 import labAdminService from '../services/labAdminService';
@@ -52,9 +43,9 @@ interface BookingRequest {
   studentEmail: string;
   studentProfileId?: string | number;
   userId?: string | number;
-  lab: string;
-  date: string;
-  timeSlot: string;
+  lab: string;       // this is lab_room name string
+  date: string;      // YYYY-MM-DD
+  timeSlot: string;  // may include spaces or seconds
   purpose: string;
   status: 'pending' | 'approved' | 'rejected' | string;
   requestedAt: string;
@@ -92,13 +83,36 @@ const relativeTime = (iso: any) => {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 };
 
+const getErrMsg = (e: any) =>
+  e?.response?.data?.detail ||
+  (e?.response?.data && JSON.stringify(e.response.data)) ||
+  e?.message ||
+  'Request failed';
+
+// ✅ Normalize to serializer-required format: "HH:MM-HH:MM" (no seconds, spaces ok but removed)
+const normalizeTimeSlot = (raw: string) => {
+  if (!raw) return '';
+  const cleaned = String(raw).trim();
+
+  // split by dash
+  const parts = cleaned.split('-');
+  if (parts.length !== 2) return cleaned;
+
+  const left = parts[0].trim();
+  const right = parts[1].trim();
+
+  // take HH:MM from possibly "HH:MM:SS"
+  const lHM = left.split(':').slice(0, 2).join(':');
+  const rHM = right.split(':').slice(0, 2).join(':');
+
+  return `${lHM}-${rHM}`;
+};
+
 export function AdminLabManagement() {
   const { theme } = useTheme();
-  
+
   // Dialog States
   const [isAddLabDialogOpen, setIsAddLabDialogOpen] = useState(false);
-  const [isAddPCDialogOpen, setIsAddPCDialogOpen] = useState(false);
-  const [isAddTimeSlotDialogOpen, setIsAddTimeSlotDialogOpen] = useState(false);
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
   const [isStudentProfileOpen, setIsStudentProfileOpen] = useState(false);
 
@@ -111,14 +125,11 @@ export function AdminLabManagement() {
   // Form States
   const [newLabName, setNewLabName] = useState('');
   const [newLabCapacity, setNewLabCapacity] = useState('');
-  const [newPCNumber, setNewPCNumber] = useState('');
-  const [selectedLabForPC, setSelectedLabForPC] = useState('');
-  const [newTimeSlot, setNewTimeSlot] = useState('');
 
   // Data States
   const [labs, setLabs] = useState<Lab[]>([]);
   const [pcs, setPcs] = useState<PC[]>([]);
-  const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([
+  const [timeSlots] = useState<TimeSlot[]>([
     { id: '1', time: '08:00 - 10:00', available: true },
     { id: '2', time: '10:00 - 12:00', available: true },
     { id: '3', time: '14:00 - 16:00', available: true },
@@ -179,7 +190,7 @@ export function AdminLabManagement() {
       });
       setPcs(allPcs);
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail || e?.message || 'Failed to load data');
+      toast.error(getErrMsg(e) || 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -202,20 +213,34 @@ export function AdminLabManagement() {
       setNewLabName(''); setNewLabCapacity(''); setIsAddLabDialogOpen(false);
       await loadAll();
     } catch (e: any) {
-      toast.error('Failed to add lab');
+      toast.error(getErrMsg(e) || 'Failed to add lab');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleApproveRequest = async (requestId: string) => {
+  // ✅ Must send lab_room + date + time_slot because serializer validate() requires them
+  const handleApproveRequest = async (req: BookingRequest) => {
     try {
       setLoading(true);
-      await labAdminService.approveBooking(requestId);
+
+      const time_slot = normalizeTimeSlot(req.timeSlot);
+      if (!time_slot) {
+        toast.error('Missing time slot');
+        return;
+      }
+
+      await labAdminService.approveBooking({
+        id: req.id,
+        lab_room: req.lab,
+        date: req.date,
+        time_slot,
+      });
+
       toast.success('Booking approved!');
       await loadAll();
     } catch (e: any) {
-      toast.error('Failed to approve request');
+      toast.error(getErrMsg(e) || 'Failed to approve request');
     } finally {
       setLoading(false);
     }
@@ -228,12 +253,26 @@ export function AdminLabManagement() {
     }
     try {
       setLoading(true);
-      await labAdminService.rejectBooking(selectedRequest.id, rejectReason);
+
+      const time_slot = normalizeTimeSlot(selectedRequest.timeSlot);
+      if (!time_slot) {
+        toast.error('Missing time slot');
+        return;
+      }
+
+      await labAdminService.rejectBooking({
+        id: selectedRequest.id,
+        lab_room: selectedRequest.lab,
+        date: selectedRequest.date,
+        time_slot,
+        reason: rejectReason,
+      });
+
       toast.success('Booking rejected');
       setRejectReason(''); setSelectedRequest(null); setIsRejectDialogOpen(false);
       await loadAll();
     } catch (e: any) {
-      toast.error('Failed to reject request');
+      toast.error(getErrMsg(e) || 'Failed to reject request');
     } finally {
       setLoading(false);
     }
@@ -242,7 +281,7 @@ export function AdminLabManagement() {
   const openStudentProfile = async (request: BookingRequest) => {
     try {
       setLoading(true);
-      let profile = request.studentProfileId 
+      let profile = request.studentProfileId
         ? await labAdminService.getStudentProfile(request.studentProfileId)
         : request.userId ? await labAdminService.getStudentProfileByUserId(request.userId) : null;
 
@@ -256,8 +295,8 @@ export function AdminLabManagement() {
         activeRentals: profile?.active_rentals ?? '—',
       });
       setIsStudentProfileOpen(true);
-    } catch (e) {
-      toast.error('Failed to load profile');
+    } catch (e: any) {
+      toast.error(getErrMsg(e) || 'Failed to load profile');
     } finally {
       setLoading(false);
     }
@@ -273,8 +312,6 @@ export function AdminLabManagement() {
   };
 
   const memoLabs = useMemo(() => labs, [labs]);
-  const memoPcs = useMemo(() => pcs, [pcs]);
-  const memoSlots = useMemo(() => timeSlots, [timeSlots]);
   const memoRequests = useMemo(() => bookingRequests, [bookingRequests]);
 
   return (
@@ -353,37 +390,50 @@ export function AdminLabManagement() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {memoRequests.map((req) => (
-                    <TableRow key={req.id}>
-                      <TableCell>
-                        <button onClick={() => openStudentProfile(req)} className="text-left group">
-                          <p className="font-medium group-hover:text-teal-500 transition-colors">{req.studentName}</p>
-                          <p className="text-xs text-gray-500">{req.studentEmail}</p>
-                        </button>
-                      </TableCell>
-                      <TableCell>{req.lab}</TableCell>
-                      <TableCell>
-                        <p>{req.date}</p>
-                        <p className="text-xs text-gray-500">{req.timeSlot}</p>
-                      </TableCell>
-                      <TableCell className="max-w-[150px] truncate text-gray-500">{req.purpose}</TableCell>
-                      <TableCell><Badge className={getStatusColor(req.status)}>{req.status}</Badge></TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
-                          {req.status === 'pending' && (
-                            <>
-                              <Button size="sm" onClick={() => handleApproveRequest(req.id)} className="bg-teal-500/10 text-teal-500 hover:bg-teal-500/20">
-                                <CheckCircle2 className="h-4 w-4" />
-                              </Button>
-                              <Button size="sm" onClick={() => { setSelectedRequest(req); setIsRejectDialogOpen(true); }} className="bg-red-500/10 text-red-500 hover:bg-red-500/20">
-                                <XCircle className="h-4 w-4" />
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {memoRequests.map((req) => {
+                    const statusLower = String(req.status).toLowerCase();
+                    return (
+                      <TableRow key={req.id}>
+                        <TableCell>
+                          <button onClick={() => openStudentProfile(req)} className="text-left group">
+                            <p className="font-medium group-hover:text-teal-500 transition-colors">{req.studentName}</p>
+                            <p className="text-xs text-gray-500">{req.studentEmail}</p>
+                          </button>
+                        </TableCell>
+                        <TableCell>{req.lab}</TableCell>
+                        <TableCell>
+                          <p>{req.date}</p>
+                          <p className="text-xs text-gray-500">{req.timeSlot}</p>
+                        </TableCell>
+                        <TableCell className="max-w-[150px] truncate text-gray-500">{req.purpose}</TableCell>
+                        <TableCell><Badge className={getStatusColor(req.status)}>{req.status}</Badge></TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            {statusLower === 'pending' && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApproveRequest(req)}
+                                  className="bg-teal-500/10 text-teal-500 hover:bg-teal-500/20"
+                                  disabled={loading}
+                                >
+                                  <CheckCircle2 className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() => { setSelectedRequest(req); setIsRejectDialogOpen(true); }}
+                                  className="bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                                  disabled={loading}
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>

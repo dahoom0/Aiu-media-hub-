@@ -8,6 +8,24 @@ const normalizeList = (data) => {
   return [];
 };
 
+// ✅ Convert "10:00:00 - 12:00:00" OR "10:00 - 12:00" OR "10:00-12:00"
+// into "10:00-12:00"
+const normalizeTimeSlot = (slot) => {
+  if (!slot) return '';
+
+  const s = String(slot).trim();
+  const parts = s.includes('-') ? s.split('-') : s.split('–'); // just in case
+  if (parts.length !== 2) return '';
+
+  const clean = (t) => String(t).trim().slice(0, 5); // HH:MM from HH:MM:SS
+  const start = clean(parts[0]);
+  const end = clean(parts[1]);
+
+  // must be exactly HH:MM
+  if (start.length !== 5 || end.length !== 5) return '';
+  return `${start}-${end}`;
+};
+
 const labAdminService = {
   // ---------------------------
   // LABS
@@ -35,30 +53,63 @@ const labAdminService = {
     return normalizeList(res.data);
   },
 
-  approveBooking: async (id) => {
+  // ✅ approveBooking(id, bookingOptional)
+  approveBooking: async (id, booking = null) => {
     // Prefer action endpoint if you have it
     try {
       const res = await api.post(`/lab-bookings/${id}/approve/`);
       return res.data;
-    } catch {
-      // fallback: patch status
-      const res = await api.patch(`/lab-bookings/${id}/`, { status: 'approved' });
+    } catch (err) {
+      // fallback: patch status + ensure time_slot format (serializer requires it)
+      const slot =
+        normalizeTimeSlot(booking?.time_slot) ||
+        normalizeTimeSlot(booking?.timeSlot) ||
+        normalizeTimeSlot(booking?.slot) ||
+        '';
+
+      const payload = {
+        status: 'approved',
+        ...(slot ? { time_slot: slot } : {}),
+      };
+
+      const res = await api.patch(`/lab-bookings/${id}/`, payload);
       return res.data;
     }
   },
 
-  rejectBooking: async (id, reason) => {
+  // ✅ rejectBooking(id, bookingOptional, reasonOptional)
+  rejectBooking: async (id, bookingOrReason, maybeReason) => {
+    // Backward compatible:
+    // - old usage: rejectBooking(id, reason)
+    // - new usage: rejectBooking(id, booking, reason)
+    let booking = null;
+    let reason = '';
+
+    if (typeof bookingOrReason === 'string') {
+      reason = bookingOrReason;
+    } else {
+      booking = bookingOrReason || null;
+      reason = maybeReason || '';
+    }
+
     // Prefer action endpoint if you have it
     try {
       const res = await api.post(`/lab-bookings/${id}/reject/`, { reason });
       return res.data;
-    } catch {
-      // fallback: patch status + reason
-      const res = await api.patch(`/lab-bookings/${id}/`, {
+    } catch (err) {
+      const slot =
+        normalizeTimeSlot(booking?.time_slot) ||
+        normalizeTimeSlot(booking?.timeSlot) ||
+        normalizeTimeSlot(booking?.slot) ||
+        '';
+
+      const payload = {
         status: 'rejected',
-        rejection_reason: reason,
-        reject_reason: reason, // extra safe in case serializer uses this
-      });
+        ...(slot ? { time_slot: slot } : {}),
+        ...(reason ? { admin_comment: reason } : {}),
+      };
+
+      const res = await api.patch(`/lab-bookings/${id}/`, payload);
       return res.data;
     }
   },
@@ -71,7 +122,6 @@ const labAdminService = {
     return res.data;
   },
 
-  // (Optional) if your API supports query by user id:
   getStudentProfileByUserId: async (userId) => {
     const res = await api.get(`/student-profiles/`, { params: { user: userId } });
     const list = normalizeList(res.data);

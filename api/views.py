@@ -14,7 +14,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db.models import F
-from datetime import timedelta, datetime  # <-- added datetime
+from datetime import timedelta, datetime
 
 from .models import *
 from .serializers import *
@@ -107,7 +107,6 @@ def profile(request):
     """
     user = request.user
 
-    # helper: build merged object the frontend expects
     def build_merged(u):
         user_data = UserSerializer(u, context={"request": request}).data
 
@@ -118,20 +117,17 @@ def profile(request):
             profile_data = AdminProfileSerializer(u.admin_profile).data
 
         merged = {
-            **user_data,           # id, username, email, first_name, last_name, phone, profile_picture, etc.
-            **profile_data,        # student_id, year, stats, etc.
-            "student_profile": profile_data,  # nested copy for convenience
+            **user_data,
+            **profile_data,
+            "student_profile": profile_data,
         }
         return merged
 
-    # ---------- GET ----------
     if request.method == "GET":
         return Response(build_merged(user))
 
-    # ---------- PATCH ----------
     data = request.data
 
-    # update User basic fields directly
     if "first_name" in data:
         user.first_name = data.get("first_name") or ""
     if "last_name" in data:
@@ -141,13 +137,11 @@ def profile(request):
     if "phone" in data:
         user.phone = data.get("phone") or ""
 
-    # profile picture (file)
     if "profile_picture" in request.FILES:
         user.profile_picture = request.FILES["profile_picture"]
 
     user.save()
 
-    # optional: update StudentProfile / AdminProfile extra fields
     if hasattr(user, "student_profile"):
         sp = user.student_profile
         if "student_id" in data:
@@ -184,27 +178,35 @@ class UserViewSet(viewsets.ModelViewSet):
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_queryset(self):
-        # Users can only see/edit themselves unless they are admin
         if self.request.user.is_staff:
             return User.objects.all()
         return User.objects.filter(id=self.request.user.id)
 
 
 class StudentProfileViewSet(viewsets.ModelViewSet):
-    queryset = StudentProfile.objects.all()
     serializer_class = StudentProfileSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.is_staff:
-            return StudentProfile.objects.all()
-        return StudentProfile.objects.filter(user=self.request.user)
+        """
+        Staff OR user_type=admin can see all students.
+        Students can only see their own profile.
+        """
+        user = self.request.user
+        qs = StudentProfile.objects.select_related("user")
+
+        if user.is_staff or getattr(user, "user_type", "") == "admin":
+            return qs.all()
+
+        return qs.filter(user=user)
 
 
 class AdminProfileViewSet(viewsets.ModelViewSet):
-    queryset = AdminProfile.objects.all()
     serializer_class = AdminProfileSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get_queryset(self):
+        return AdminProfile.objects.select_related("user").all()
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -240,39 +242,93 @@ class TutorialProgressViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return TutorialProgress.objects.filter(student=self.request.user)
 
+    def _to_int(self, v, default=None):
+        if v is None or v == "":
+            return default
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return default
+
+    def _to_bool(self, v, default=False):
+        if v is None or v == "":
+            return default
+        if isinstance(v, bool):
+            return v
+        s = str(v).strip().lower()
+        if s in ("1", "true", "yes", "y", "on"):
+            return True
+        if s in ("0", "false", "no", "n", "off"):
+            return False
+        return default
+
+    @action(detail=False, methods=["get"], url_path="my")
+    def my_progress(self, request):
+        qs = self.get_queryset().select_related("tutorial")
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], url_path=r"by-tutorial/(?P<tutorial_id>\d+)")
+    def by_tutorial(self, request, tutorial_id=None):
+        record = TutorialProgress.objects.filter(
+            student=request.user, tutorial_id=tutorial_id
+        ).first()
+        if not record:
+            return Response({}, status=status.HTTP_200_OK)
+        return Response(self.get_serializer(record).data)
+
     def create(self, request, *args, **kwargs):
         student = request.user
         tutorial_id = request.data.get("tutorial")
-        progress_percentage = request.data.get("progress_percentage")
-        completed = request.data.get("completed")
-
         if not tutorial_id:
             return Response({"error": "Tutorial ID required"}, status=400)
 
         tutorial = get_object_or_404(Tutorial, id=tutorial_id)
 
-        # Update or Create
-        progress_record, created = TutorialProgress.objects.update_or_create(
-            student=student,
-            tutorial=tutorial,
-            defaults={
-                "progress_percentage": progress_percentage,
-                "completed": completed,
-                "last_watched_at": timezone.now(),
-            },
-        )
+        incoming_progress = self._to_int(request.data.get("progress_percentage"), default=0)
+        incoming_progress = max(0, min(100, incoming_progress))
 
-        # AUTO-UPDATE STATS
+        incoming_completed = self._to_bool(request.data.get("completed"), default=False)
+
+        if incoming_progress >= 95:
+            incoming_completed = True
+            incoming_progress = 100
+
+        existing = TutorialProgress.objects.filter(student=student, tutorial=tutorial).first()
+
+        if existing:
+            existing_progress = self._to_int(existing.progress_percentage, default=0) or 0
+            progress_to_save = max(existing_progress, incoming_progress)
+
+            completed_to_save = bool(existing.completed) or bool(incoming_completed)
+
+            if completed_to_save:
+                progress_to_save = 100
+
+            payload = {
+                "tutorial": tutorial.id,
+                "progress_percentage": progress_to_save,
+                "completed": completed_to_save,
+            }
+
+            serializer = self.get_serializer(existing, data=payload, partial=True)
+            serializer.is_valid(raise_exception=True)
+            progress_record = serializer.save(last_watched_at=timezone.now())
+        else:
+            payload = {
+                "tutorial": tutorial.id,
+                "progress_percentage": incoming_progress,
+                "completed": incoming_completed,
+            }
+            serializer = self.get_serializer(data=payload)
+            serializer.is_valid(raise_exception=True)
+            progress_record = serializer.save(student=student, last_watched_at=timezone.now())
+
         if hasattr(student, "student_profile"):
-            count = TutorialProgress.objects.filter(
-                student=student, completed=True
-            ).count()
-            StudentProfile.objects.filter(user=student).update(
-                tutorials_watched=count
-            )
+            count = TutorialProgress.objects.filter(student=student, completed=True).count()
+            StudentProfile.objects.filter(user=student).update(tutorials_watched=count)
 
-        serializer = self.get_serializer(progress_record)
-        return Response(serializer.data)
+        return Response(self.get_serializer(progress_record).data, status=status.HTTP_200_OK)
 
 
 # --------------- LAB LOGIC --------------- #
@@ -289,7 +345,6 @@ class LabBookingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Admins can see all; students only see their own bookings
         if self.request.user.is_staff:
             return LabBooking.objects.all()
         return LabBooking.objects.filter(student=self.request.user)
@@ -297,22 +352,14 @@ class LabBookingViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         booking = serializer.save(student=self.request.user)
 
-        # AUTO-UPDATE STATS
         if hasattr(self.request.user, "student_profile"):
-            count = LabBooking.objects.filter(
-                student=self.request.user
-            ).count()
+            count = LabBooking.objects.filter(student=self.request.user).count()
             StudentProfile.objects.filter(user=self.request.user).update(
                 total_bookings=count
             )
 
     @action(detail=False, methods=["get"], url_path="available-imacs")
     def available_imacs(self, request):
-        """
-        Return list of available iMac numbers (1–30) for a given date + time_slot.
-        Frontend can call:
-            GET /lab-bookings/available-imacs/?date=YYYY-MM-DD&time_slot=09:00-11:00&lab_room=BMC%20Lab
-        """
         date_str = request.query_params.get("date")
         time_slot = request.query_params.get("time_slot")
         lab_room = request.query_params.get("lab_room")
@@ -323,7 +370,6 @@ class LabBookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Parse date
         try:
             booking_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
@@ -332,7 +378,6 @@ class LabBookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Resolve lab
         lab_obj = None
         if lab_room:
             try:
@@ -343,7 +388,6 @@ class LabBookingViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
-            # Fallback: if only one active lab, use it
             active_labs = Lab.objects.filter(is_active=True)
             if active_labs.count() == 1:
                 lab_obj = active_labs.first()
@@ -354,7 +398,6 @@ class LabBookingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Find already booked iMacs (excluding cancelled/rejected)
         booked_numbers = LabBooking.objects.filter(
             lab=lab_obj,
             booking_date=booking_date,
@@ -363,7 +406,6 @@ class LabBookingViewSet(viewsets.ModelViewSet):
 
         booked_set = set(booked_numbers)
 
-        # We defined imac_number 1–30 in the model; use that range
         all_imacs = range(1, 31)
         available = [n for n in all_imacs if n not in booked_set]
 
@@ -386,7 +428,6 @@ class EquipmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"])
     def checkout(self, request):
-        # Allow checking out by 'equipment_id' (QR code) or 'id' (Database ID)
         eid = request.data.get("equipment_id")
 
         try:
@@ -405,9 +446,7 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         notes = request.data.get("notes", "")
 
         if equipment.quantity_available < 1:
-            return Response(
-                {"error": "Item is currently out of stock"}, status=400
-            )
+            return Response({"error": "Item is currently out of stock"}, status=400)
 
         EquipmentRental.objects.create(
             student=request.user,
@@ -423,7 +462,6 @@ class EquipmentViewSet(viewsets.ModelViewSet):
             equipment.status = "rented"
         equipment.save()
 
-        # AUTO-UPDATE STATS
         if hasattr(request.user, "student_profile"):
             count = EquipmentRental.objects.filter(
                 student=request.user, status="active"
@@ -463,7 +501,6 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
             equipment.status = "available"
         equipment.save()
 
-        # AUTO-UPDATE STATS
         if hasattr(request.user, "student_profile"):
             count = EquipmentRental.objects.filter(
                 student=request.user, status="active"
@@ -555,8 +592,6 @@ class ReferenceViewSet(BaseCVItemViewSet):
     def get_queryset(self):
         return Reference.objects.filter(cv__student=self.request.user)
 
-
-# NEW: Languages & Awards ViewSets for CV
 
 class LanguageViewSet(BaseCVItemViewSet):
     queryset = Language.objects.all()

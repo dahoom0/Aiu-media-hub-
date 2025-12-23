@@ -1,12 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
 import {
   ArrowLeft,
-  CheckCircle2,
   Share2,
   Eye,
   Clock,
   AlertCircle,
-  Loader2,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -20,6 +18,13 @@ interface VideoPlayerPageProps {
   onBack: () => void;
 }
 
+declare global {
+  interface Window {
+    YT?: any;
+    onYouTubeIframeAPIReady?: () => void;
+  }
+}
+
 export function VideoPlayerPage({
   video,
   initialProgress = 0,
@@ -30,7 +35,6 @@ export function VideoPlayerPage({
 
   const [isCompleted, setIsCompleted] = useState(isInitiallyCompleted);
   const [currentViews, setCurrentViews] = useState<number>(video.views || 0);
-  const [loading, setLoading] = useState(false);
 
   const [progress, setProgress] = useState<number>(initialProgress);
   const [progressId, setProgressId] = useState<number | null>(
@@ -38,24 +42,40 @@ export function VideoPlayerPage({
   );
 
   const hasCountedView = useRef(false);
-  const videoElementRef = useRef<HTMLVideoElement | null>(null);
-  const lastSavedRef = useRef(initialProgress || 0);
 
-  // --- Helper: Save Progress (create or update) ---
+  // HTML5 player refs
+  const videoElementRef = useRef<HTMLVideoElement | null>(null);
+
+  // YouTube player refs
+  const ytPlayerRef = useRef<any>(null);
+  const ytPollIntervalRef = useRef<number | null>(null);
+  const ytReadyRef = useRef(false);
+
+  // progress saving refs
+  const lastSavedRef = useRef(initialProgress || 0);
+  const lastSentAtRef = useRef<number>(0);
+
+  // --- Helper: normalize + throttle save ---
   const saveProgress = async (percentage: number, completedFlag?: boolean) => {
     try {
       const safePercentage = Math.max(0, Math.min(100, Math.round(percentage)));
+      const now = Date.now();
+
+      // Basic throttle (avoid hammering API)
+      if (now - lastSentAtRef.current < 1000) return;
+      lastSentAtRef.current = now;
 
       let res;
       if (progressId) {
-        // Update existing progress row
+        // Some implementations PATCH by id
         res = await tutorialService.saveProgress({
           id: progressId,
+          tutorial: video.id, // keep tutorial too (safe)
           progress_percentage: safePercentage,
           completed: completedFlag ?? false,
         });
       } else {
-        // Create new progress row
+        // Create (or backend UPSERT create)
         res = await tutorialService.saveProgress({
           tutorial: video.id,
           progress_percentage: safePercentage,
@@ -76,10 +96,8 @@ export function VideoPlayerPage({
     if (video?.id && !hasCountedView.current) {
       const trackView = async () => {
         try {
-          // Calls POST /tutorials/:id/increment_views/
           const data = await tutorialService.incrementViews(video.id);
 
-          // Backend returns updated tutorial (TutorialSerializer)
           const updatedViews =
             data?.views ??
             data?.view_count ??
@@ -137,10 +155,18 @@ export function VideoPlayerPage({
 
     setProgress(rounded);
 
-    // Save every extra 10% (but not at 100%, handled in onEnded)
+    // Save every +10%
     if (rounded < 100 && rounded - lastSavedRef.current >= 10) {
       lastSavedRef.current = rounded;
       await saveProgress(rounded, false);
+    }
+
+    // If near-end, auto complete (safety)
+    if (rounded >= 95 && !isCompleted) {
+      setIsCompleted(true);
+      setProgress(100);
+      lastSavedRef.current = 100;
+      await saveProgress(100, true);
     }
   };
 
@@ -151,7 +177,170 @@ export function VideoPlayerPage({
     await saveProgress(100, true);
   };
 
-  // --- 4. Render Video Player ---
+  // --- YouTube helpers ---
+  const youtubeRegex =
+    /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+
+  const getYouTubeId = (url: string) => {
+    const m = url.match(youtubeRegex);
+    return m && m[1] ? m[1] : null;
+  };
+
+  const ensureYouTubeApi = (): Promise<void> => {
+    return new Promise((resolve) => {
+      if (window.YT && window.YT.Player) return resolve();
+
+      const existing = document.querySelector('script[data-yt-iframe-api="1"]');
+      if (existing) {
+        const check = setInterval(() => {
+          if (window.YT && window.YT.Player) {
+            clearInterval(check);
+            resolve();
+          }
+        }, 100);
+        return;
+      }
+
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      tag.async = true;
+      tag.setAttribute('data-yt-iframe-api', '1');
+
+      window.onYouTubeIframeAPIReady = () => resolve();
+      document.body.appendChild(tag);
+    });
+  };
+
+  const clearYouTubePolling = () => {
+    if (ytPollIntervalRef.current) {
+      window.clearInterval(ytPollIntervalRef.current);
+      ytPollIntervalRef.current = null;
+    }
+  };
+
+  const destroyYouTubePlayer = () => {
+    clearYouTubePolling();
+    try {
+      if (ytPlayerRef.current && ytPlayerRef.current.destroy) {
+        ytPlayerRef.current.destroy();
+      }
+    } catch {
+      // ignore
+    }
+    ytPlayerRef.current = null;
+    ytReadyRef.current = false;
+  };
+
+  const startYouTubePolling = () => {
+    clearYouTubePolling();
+
+    ytPollIntervalRef.current = window.setInterval(async () => {
+      try {
+        const player = ytPlayerRef.current;
+        if (!player || !ytReadyRef.current) return;
+
+        const duration = player.getDuration?.();
+        const currentTime = player.getCurrentTime?.();
+        if (!duration || duration <= 0) return;
+
+        const percentage = (currentTime / duration) * 100;
+        const rounded = Math.floor(percentage);
+
+        if (rounded > progress) {
+          setProgress(rounded);
+        }
+
+        // Save every +10%
+        if (rounded < 100 && rounded - lastSavedRef.current >= 10) {
+          lastSavedRef.current = rounded;
+          await saveProgress(rounded, false);
+        }
+
+        // Auto complete near end
+        if (rounded >= 95 && !isCompleted) {
+          setIsCompleted(true);
+          setProgress(100);
+          lastSavedRef.current = 100;
+          await saveProgress(100, true);
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 5000);
+  };
+
+  // --- 4. Setup YouTube Player when URL is YouTube ---
+  useEffect(() => {
+    const url = video?.videoUrl;
+    if (!url) return;
+
+    const ytId = getYouTubeId(url);
+    if (!ytId) {
+      destroyYouTubePlayer();
+      return;
+    }
+
+    let cancelled = false;
+
+    const setup = async () => {
+      try {
+        await ensureYouTubeApi();
+        if (cancelled) return;
+
+        destroyYouTubePlayer();
+
+        ytPlayerRef.current = new window.YT.Player('yt-player-container', {
+          videoId: ytId,
+          playerVars: {
+            autoplay: 1,
+            rel: 0,
+            modestbranding: 1,
+            enablejsapi: 1,
+          },
+          events: {
+            onReady: () => {
+              ytReadyRef.current = true;
+              startYouTubePolling();
+            },
+            onStateChange: async (event: any) => {
+              if (event?.data === 0) {
+                setIsCompleted(true);
+                setProgress(100);
+                lastSavedRef.current = 100;
+                await saveProgress(100, true);
+              }
+            },
+          },
+        });
+      } catch (e) {
+        console.error('Failed to setup YouTube player', e);
+      }
+    };
+
+    setup();
+
+    return () => {
+      cancelled = true;
+      destroyYouTubePlayer();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video?.videoUrl, video?.id]);
+
+  // Save progress on unmount (best-effort)
+  useEffect(() => {
+    return () => {
+      try {
+        if (video?.id && progress > 0 && progress < 100) {
+          saveProgress(progress, isCompleted);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video?.id, progress, isCompleted]);
+
+  // --- 5. Render Video Player ---
   const renderVideoPlayer = () => {
     const url = video?.videoUrl;
 
@@ -164,29 +353,12 @@ export function VideoPlayerPage({
       );
     }
 
-    // YouTube detection
-    const youtubeRegex =
-      /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-    const ytMatch = url.match(youtubeRegex);
+    const ytId = getYouTubeId(url);
 
-    if (ytMatch && ytMatch[1]) {
-      const videoId = ytMatch[1];
-
-      // With YouTube iframe we can't track time easily without extra API,
-      // so we rely on the "Mark Complete" button for full completion.
-      return (
-        <iframe
-          className="w-full h-full object-cover"
-          src={`https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`}
-          title={video.title}
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-          style={{ border: 'none' }}
-        />
-      );
+    if (ytId) {
+      return <div id="yt-player-container" className="w-full h-full" />;
     }
 
-    // Direct video file: HTML5 player, we can track progress & completion
     return (
       <video
         className="w-full h-full bg-black"
@@ -200,25 +372,6 @@ export function VideoPlayerPage({
         Your browser does not support the video tag.
       </video>
     );
-  };
-
-  // --- 5. Mark Complete Button (works for all videos, including YouTube) ---
-  const handleMarkComplete = async () => {
-    setLoading(true);
-    try {
-      const newStatus = !isCompleted;
-      const newPercentage = newStatus ? 100 : Math.max(progress, 50);
-
-      setIsCompleted(newStatus);
-      setProgress(newPercentage);
-      lastSavedRef.current = newPercentage;
-
-      await saveProgress(newPercentage, newStatus);
-    } catch (e) {
-      console.error('Failed to save completion', e);
-    } finally {
-      setLoading(false);
-    }
   };
 
   return (
@@ -284,24 +437,6 @@ export function VideoPlayerPage({
                   onClick={() => alert('Shared!')}
                 >
                   <Share2 className="h-4 w-4 mr-2" /> Share
-                </Button>
-                <Button
-                  variant={isCompleted ? 'default' : 'outline'}
-                  size="sm"
-                  className={
-                    isCompleted
-                      ? 'bg-green-600 hover:bg-green-700 text-white'
-                      : ''
-                  }
-                  onClick={handleMarkComplete}
-                  disabled={loading}
-                >
-                  {loading ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="h-4 w-4 mr-2" />
-                  )}
-                  {isCompleted ? 'Completed' : 'Mark Complete'}
                 </Button>
               </div>
             </div>
