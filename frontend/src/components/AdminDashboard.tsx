@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
+import { Label } from './ui/label';
+import { Textarea } from './ui/textarea';
 import {
   Users,
   Package,
@@ -44,6 +47,7 @@ type LabBooking = {
   status?: StatusString;
 
   user?: {
+    id?: number;
     username?: string;
     first_name?: string;
     last_name?: string;
@@ -131,22 +135,20 @@ function safeTime(t?: string) {
   return d.toLocaleString();
 }
 
-// ✅ Parses "HH:MM-HH:MM" or "HH:MM - HH:MM" or with seconds
 function normalizeTimeSlot(slot?: string) {
   if (!slot) return null;
-  const s = String(slot).trim();
+  const s = String(slot).trim().replace(/\s+/g, '');
   const parts = s.includes('-') ? s.split('-') : s.split('–');
   if (parts.length !== 2) return null;
 
-  const clean = (t: string) => t.trim().slice(0, 5); // HH:MM from HH:MM:SS
+  const clean = (t: string) => t.trim().slice(0, 5);
   const start = clean(parts[0]);
   const end = clean(parts[1]);
   if (start.length !== 5 || end.length !== 5) return null;
 
-  return { start, end };
+  return { start, end, normalized: `${start}-${end}` };
 }
 
-// ✅ Booking is "in use right now" if approved + today + current time within timeslot
 function isActiveNow(booking: LabBooking) {
   const status = safeStatus(booking.status);
   if (status !== 'approved') return false;
@@ -171,6 +173,8 @@ function isActiveNow(booking: LabBooking) {
   return nowMinutes >= startMinutes && nowMinutes < endMinutes;
 }
 
+type ApprovalType = 'booking' | 'rental' | 'cv';
+
 export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const [bookings, setBookings] = useState<LabBooking[]>([]);
   const [rentals, setRentals] = useState<EquipmentRental[]>([]);
@@ -184,10 +188,9 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     pendingCVs: 0,
   });
 
-  // ✅ Equipment stats from backend
   const [equipmentStats, setEquipmentStats] = useState({
     available: 0,
-    inUse: 0, // backend "rented"
+    inUse: 0,
     maintenance: 0,
     total: 0,
   });
@@ -195,7 +198,12 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [actionLoading, setActionLoading] = useState<Record<number, 'approve' | 'reject' | null>>({});
+  const [actionLoading, setActionLoading] = useState<Record<string, 'approve' | 'reject' | null>>({});
+
+  // ✅ Reject comment dialog state (requested)
+  const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
+  const [rejectComment, setRejectComment] = useState('');
+  const [rejectTarget, setRejectTarget] = useState<{ type: ApprovalType; id: number } | null>(null);
 
   const studentDisplay = (obj: { student_name?: string; user?: any }) => {
     if (obj.student_name) return obj.student_name;
@@ -216,9 +224,7 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     return imac ? `${lab} • ${imac}` : lab;
   };
 
-  const rentalItemLabel = (r: EquipmentRental) => {
-    return r.equipment_name || r.item_name || 'Equipment';
-  };
+  const rentalItemLabel = (r: EquipmentRental) => r.equipment_name || r.item_name || 'Equipment';
 
   const rentalDurationLabel = (r: EquipmentRental) => {
     if (r.duration) return r.duration;
@@ -227,9 +233,7 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     return '—';
   };
 
-  const cvItemLabel = (c: CVItem) => {
-    return c.title || c.template_name || 'CV Submission';
-  };
+  const cvItemLabel = (c: CVItem) => c.title || c.template_name || 'CV Submission';
 
   const fetchEquipmentStats = async () => {
     try {
@@ -247,14 +251,8 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
         total: items.length,
       });
     } catch (e) {
-      // don't break dashboard UI if equipment fails
       console.error('Failed to fetch equipment stats', e);
-      setEquipmentStats({
-        available: 0,
-        inUse: 0,
-        maintenance: 0,
-        total: 0,
-      });
+      setEquipmentStats({ available: 0, inUse: 0, maintenance: 0, total: 0 });
     }
   };
 
@@ -277,7 +275,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
       setStatsData(dashboardStats);
       setLabs(normalizeList(labsRes));
 
-      // ✅ also fetch equipment counts
       await fetchEquipmentStats();
     } catch (e: any) {
       setError(e?.response?.data?.detail || e?.message || 'Failed to load admin dashboard data.');
@@ -285,14 +282,7 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
       setRentals([]);
       setCvs([]);
       setLabs([]);
-      setStatsData({
-        totalStudents: 0,
-        pendingBookings: 0,
-        activeRentals: 0,
-        pendingCVs: 0,
-      });
-
-      // still try equipment (optional)
+      setStatsData({ totalStudents: 0, pendingBookings: 0, activeRentals: 0, pendingCVs: 0 });
       await fetchEquipmentStats();
     } finally {
       setLoading(false);
@@ -304,16 +294,19 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ Build approvals WITH booking fields needed for approve/reject
   const pendingApprovals = useMemo(() => {
     const pendingBookings = bookings
       .filter((b) => safeStatus(b.status) === 'pending')
       .map((b) => ({
         id: b.id,
-        type: 'booking',
+        type: 'booking' as const,
         student: studentDisplay(b),
         item: bookingItemLabel(b),
         date: bookingDate(b),
         time: b.time_slot || '',
+        lab_room: b.lab_room || '',
+        time_slot: b.time_slot || '',
         requestedAt: safeTime(b.created_at),
       }));
 
@@ -321,7 +314,7 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
       .filter((r) => safeStatus(r.status) === 'pending')
       .map((r) => ({
         id: r.id,
-        type: 'rental',
+        type: 'rental' as const,
         student: studentDisplay(r),
         item: rentalItemLabel(r),
         duration: rentalDurationLabel(r),
@@ -332,7 +325,7 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
       .filter((c) => safeStatus(c.status) === 'pending')
       .map((c) => ({
         id: c.id,
-        type: 'cv',
+        type: 'cv' as const,
         student: studentDisplay(c),
         item: cvItemLabel(c),
         duration: 'CV review',
@@ -453,7 +446,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
         color: 'teal',
       },
       {
-        // ✅ now from equipment list
         label: 'Equipment in Use',
         value: String(equipmentStats.inUse),
         change: '',
@@ -481,13 +473,17 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   }, [statsData, equipmentStats]);
 
   const getTypeIcon = (type: string) => {
-    return type === 'booking' ? Calendar : Package;
+    if (type === 'booking') return Calendar;
+    if (type === 'rental') return Package;
+    return Video;
   };
 
   const getTypeColor = (type: string) => {
     return type === 'booking'
       ? 'bg-purple-500/20 text-purple-400 border-purple-500/50'
-      : 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50';
+      : type === 'rental'
+      ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
+      : 'bg-orange-500/20 text-orange-400 border-orange-500/50';
   };
 
   const getStatusColor = (status: string) => {
@@ -501,33 +497,99 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     }
   };
 
-  const handleApprove = async (id: number) => {
-    setActionLoading((prev) => ({ ...prev, [id]: 'approve' }));
+  const actionKey = (type: ApprovalType, id: number) => `${type}-${id}`;
+
+  const handleApprove = async (type: ApprovalType, id: number) => {
+    const key = actionKey(type, id);
+    setActionLoading((prev) => ({ ...prev, [key]: 'approve' }));
     setError(null);
+
     try {
-      await adminService.approveBooking(id);
+      if (type === 'booking') {
+        // ✅ correct endpoint via labAdminService
+        const b = bookings.find((x) => x.id === id);
+        const date = b?.booking_date || b?.date;
+        const lab_room = b?.lab_room;
+        const slot = normalizeTimeSlot(b?.time_slot)?.normalized;
+
+        await labAdminService.approveBooking({
+          id,
+          lab_room,
+          date,
+          time_slot: slot,
+        });
+      } else if (type === 'rental') {
+        await equipmentAdminService.approveRental(id);
+      } else {
+        return;
+      }
+
       await loadDashboard();
     } catch (e: any) {
-      setError(e?.response?.data?.detail || e?.message || 'Failed to approve booking.');
+      const msg =
+        e?.response?.data?.detail ||
+        e?.response?.data?.error ||
+        e?.message ||
+        `Failed to approve ${type}.`;
+      setError(msg);
     } finally {
-      setActionLoading((prev) => ({ ...prev, [id]: null }));
+      setActionLoading((prev) => ({ ...prev, [key]: null }));
     }
   };
 
-  const handleReject = async (id: number) => {
-    setActionLoading((prev) => ({ ...prev, [id]: 'reject' }));
+  // ✅ open reject dialog (requested)
+  const openRejectDialog = (type: ApprovalType, id: number) => {
+    setRejectTarget({ type, id });
+    setRejectComment('');
+    setIsRejectDialogOpen(true);
+  };
+
+  const confirmReject = async () => {
+    if (!rejectTarget) return;
+
+    const { type, id } = rejectTarget;
+    const key = actionKey(type, id);
+
+    setActionLoading((prev) => ({ ...prev, [key]: 'reject' }));
     setError(null);
+
     try {
-      await adminService.rejectBooking(id);
+      if (type === 'booking') {
+        const b = bookings.find((x) => x.id === id);
+        const date = b?.booking_date || b?.date;
+        const lab_room = b?.lab_room;
+        const slot = normalizeTimeSlot(b?.time_slot)?.normalized;
+
+        await labAdminService.rejectBooking({
+          id,
+          lab_room,
+          date,
+          time_slot: slot,
+          reason: rejectComment || 'Rejected by admin',
+          admin_comment: rejectComment || 'Rejected by admin',
+        });
+      } else if (type === 'rental') {
+        await equipmentAdminService.rejectRental(id, rejectComment || 'Rejected by admin');
+      } else {
+        return;
+      }
+
+      setIsRejectDialogOpen(false);
+      setRejectTarget(null);
+      setRejectComment('');
       await loadDashboard();
     } catch (e: any) {
-      setError(e?.response?.data?.detail || e?.message || 'Failed to reject booking.');
+      const msg =
+        e?.response?.data?.detail ||
+        e?.response?.data?.error ||
+        e?.message ||
+        `Failed to reject ${type}.`;
+      setError(msg);
     } finally {
-      setActionLoading((prev) => ({ ...prev, [id]: null }));
+      setActionLoading((prev) => ({ ...prev, [key]: null }));
     }
   };
 
-  // ✅ Real BMC Lab utilization numbers (NO UI change, only data)
   const bmcUtil = useMemo(() => {
     const bmc = labs.find(
       (l) => String(l?.name || l?.lab_name || '').toLowerCase().trim() === 'bmc lab'
@@ -546,12 +608,9 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
       <div>
         <h1 className="text-white mb-2">Admin Dashboard</h1>
-        <p className="text-gray-400">
-          Manage bookings, equipment, and content
-        </p>
+        <p className="text-gray-400">Manage bookings, equipment, and content</p>
 
         {loading && (
           <div className="flex items-center gap-2 text-sm text-gray-500 mt-2">
@@ -568,7 +627,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
         )}
       </div>
 
-      {/* Stats Grid */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat, index) => {
           const Icon = stat.icon;
@@ -604,9 +662,7 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
         })}
       </div>
 
-      {/* Main Content */}
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Pending Approvals */}
         <Card className="bg-gray-900/50 border-gray-800">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -615,25 +671,20 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                 {pendingApprovals.length} Pending
               </Badge>
             </div>
-            <CardDescription className="text-gray-400">
-              Requests awaiting your review
-            </CardDescription>
+            <CardDescription className="text-gray-400">Requests awaiting your review</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {pendingApprovals.map((approval: any) => {
               const TypeIcon = getTypeIcon(approval.type);
-              const rowLoading =
-                actionLoading[approval.id] !== null && actionLoading[approval.id] !== undefined;
+              const key = actionKey(approval.type, approval.id);
+              const rowLoading = actionLoading[key] !== null && actionLoading[key] !== undefined;
 
               return (
-                <div
-                  key={approval.id}
-                  className="p-4 rounded-lg bg-gray-800/50 border border-gray-700 space-y-3"
-                >
+                <div key={approval.id} className="p-4 rounded-lg bg-gray-800/50 border border-gray-700 space-y-3">
                   <div className="flex items-start justify-between">
                     <div className="flex items-start gap-3">
-                      <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${approval.type === 'booking' ? 'bg-purple-500/20' : 'bg-cyan-500/20'}`}>
-                        <TypeIcon className={`h-5 w-5 ${approval.type === 'booking' ? 'text-purple-400' : 'text-cyan-400'}`} />
+                      <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${approval.type === 'booking' ? 'bg-purple-500/20' : approval.type === 'rental' ? 'bg-cyan-500/20' : 'bg-orange-500/20'}`}>
+                        <TypeIcon className={`h-5 w-5 ${approval.type === 'booking' ? 'text-purple-400' : approval.type === 'rental' ? 'text-cyan-400' : 'text-orange-400'}`} />
                       </div>
                       <div>
                         <p className="text-white">{approval.student}</p>
@@ -643,15 +694,11 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                             {approval.date} • {approval.time}
                           </p>
                         ) : (
-                          <p className="text-xs text-gray-500 mt-1">
-                            Duration: {approval.duration}
-                          </p>
+                          <p className="text-xs text-gray-500 mt-1">Duration: {approval.duration}</p>
                         )}
                       </div>
                     </div>
-                    <Badge className={getTypeColor(approval.type)}>
-                      {approval.type}
-                    </Badge>
+                    <Badge className={getTypeColor(approval.type)}>{approval.type}</Badge>
                   </div>
 
                   <div className="flex items-center justify-between pt-2 border-t border-gray-700">
@@ -662,8 +709,8 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                         size="sm"
                         variant="outline"
                         className="border-red-500/50 text-red-400 hover:bg-red-500/10"
-                        disabled={loading || rowLoading || approval.type !== 'booking'}
-                        onClick={() => handleReject(approval.id)}
+                        disabled={loading || rowLoading || approval.type === 'cv'}
+                        onClick={() => openRejectDialog(approval.type, approval.id)}
                       >
                         <XCircle className="h-3 w-3 mr-1" />
                         Reject
@@ -671,8 +718,8 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                       <Button
                         size="sm"
                         className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
-                        disabled={loading || rowLoading || approval.type !== 'booking'}
-                        onClick={() => handleApprove(approval.id)}
+                        disabled={loading || rowLoading || approval.type === 'cv'}
+                        onClick={() => handleApprove(approval.type, approval.id)}
                       >
                         <CheckCircle2 className="h-3 w-3 mr-1" />
                         Approve
@@ -685,20 +732,14 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
           </CardContent>
         </Card>
 
-        {/* Recent Activity */}
         <Card className="bg-gray-900/50 border-gray-800">
           <CardHeader>
             <CardTitle className="text-white">Recent Activity</CardTitle>
-            <CardDescription className="text-gray-400">
-              Latest system activities
-            </CardDescription>
+            <CardDescription className="text-gray-400">Latest system activities</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {recentActivity.map((activity: any) => (
-              <div
-                key={activity.id}
-                className="flex items-start gap-3 p-3 rounded-lg bg-gray-800/50 border border-gray-700"
-              >
+              <div key={activity.id} className="flex items-start gap-3 p-3 rounded-lg bg-gray-800/50 border border-gray-700">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-700">
                   <CheckCircle2 className={`h-4 w-4 ${getStatusColor(activity.status)}`} />
                 </div>
@@ -713,7 +754,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
         </Card>
       </div>
 
-      {/* Quick Stats */}
       <div className="grid gap-6 md:grid-cols-3">
         <Card className="bg-gray-900/50 border-gray-800">
           <CardHeader>
@@ -741,7 +781,6 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
           </CardContent>
         </Card>
 
-        {/* ✅ Lab Utilization (REAL DATA, same UI style/classes) */}
         <Card className="bg-gray-900/50 border-gray-800">
           <CardHeader>
             <CardTitle className="text-white">Lab Utilization</CardTitle>
@@ -797,16 +836,13 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
         </Card>
       </div>
 
-      {/* Action Cards */}
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="bg-gradient-to-r from-teal-500/10 to-cyan-500/10 border-teal-500/20">
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-white mb-2">Content Management</h3>
-                <p className="text-gray-400">
-                  Upload new tutorials and manage existing content
-                </p>
+                <p className="text-gray-400">Upload new tutorials and manage existing content</p>
               </div>
               <Button
                 className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
@@ -824,9 +860,7 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-white mb-2">User Management</h3>
-                <p className="text-gray-400">
-                  Manage student accounts and permissions
-                </p>
+                <p className="text-gray-400">Manage student accounts and permissions</p>
               </div>
               <Button
                 className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white"
@@ -839,6 +873,36 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* ✅ REJECT COMMENT DIALOG (requested) */}
+      <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
+        <DialogContent className="bg-gray-900 border-gray-800">
+          <DialogHeader>
+            <DialogTitle className="text-white">Reject Request</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-gray-400">Comment (student will see this)</Label>
+            <Textarea
+              value={rejectComment}
+              onChange={(e) => setRejectComment(e.target.value)}
+              placeholder="Write the reason..."
+              className="bg-gray-950 border-gray-800 text-white"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setIsRejectDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-500 text-white hover:bg-red-600"
+              onClick={confirmReject}
+              disabled={loading || !rejectTarget}
+            >
+              Reject
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

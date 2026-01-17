@@ -16,6 +16,7 @@ export function SignupPage({ onNavigate }: SignupPageProps) {
     fullName: '',
     email: '',
     studentId: '',
+    year: '', // ✅ added
     password: '',
     confirmPassword: '',
   });
@@ -42,12 +43,16 @@ export function SignupPage({ onNavigate }: SignupPageProps) {
       return;
     }
 
+    // ✅ Year validation (simple, no UI change)
+    if (!formData.year.trim()) {
+      setError("Year of Study is required");
+      return;
+    }
+
     setLoading(true);
 
     try {
       // 2. Format Data for Django
-      // Your backend expects: first_name, last_name, username, etc.
-      
       // Split "John Doe" -> "John" and "Doe"
       const nameParts = formData.fullName.trim().split(' ');
       const firstName = nameParts[0];
@@ -59,33 +64,29 @@ export function SignupPage({ onNavigate }: SignupPageProps) {
         password: formData.password,
         first_name: firstName,
         last_name: lastName,
-        student_id: formData.studentId, // Ensure this is sent if your profile model needs it
-        user_type: 'student' // Required by your custom permission logic
+        student_id: formData.studentId,
+        year: formData.year, // ✅ added
+        user_type: 'student'
       };
 
-      // 3. Call API
-      // Since we updated authService.js, this will auto-save the tokens
       await authService.register(registerPayload);
 
-      // 4. Success!
       alert("Account created successfully!");
-      // Because your backend logs us in automatically on register, go straight to dashboard
       onNavigate('student-dashboard');
-
     } catch (err: any) {
       console.error('Registration error:', err);
-      
-      // Handle backend errors
+
       if (err.response && err.response.data) {
-        // Check for specific field errors
         if (err.response.data.username) {
-            setError(`Student ID error: ${err.response.data.username[0]}`);
+          setError(`Student ID error: ${err.response.data.username[0]}`);
         } else if (err.response.data.email) {
-            setError(`Email error: ${err.response.data.email[0]}`);
+          setError(`Email error: ${err.response.data.email[0]}`);
+        } else if (err.response.data.year) {
+          setError(`Year error: ${err.response.data.year[0]}`);
         } else if (err.response.data.error) {
-            setError(err.response.data.error);
+          setError(err.response.data.error);
         } else {
-            setError("Registration failed. Please check your details.");
+          setError("Registration failed. Please check your details.");
         }
       } else {
         setError("Unable to connect to server. Is the backend running?");
@@ -97,7 +98,6 @@ export function SignupPage({ onNavigate }: SignupPageProps) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 flex items-center justify-center p-6">
-      
       {/* Background decoration */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-teal-500/10 rounded-full blur-3xl" />
@@ -171,6 +171,19 @@ export function SignupPage({ onNavigate }: SignupPageProps) {
                 </div>
               </div>
 
+              {/* ✅ NEW: Year of Study */}
+              <div className="space-y-2">
+                <Label htmlFor="year" className="text-gray-300">Year of Study</Label>
+                <Input
+                  id="year"
+                  placeholder="e.g. 1st Year"
+                  className="bg-gray-950 border-gray-700 text-white focus:border-teal-500"
+                  value={formData.year}
+                  onChange={handleChange}
+                  required
+                />
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="password" className="text-gray-300">Password</Label>
                 <Input
@@ -203,12 +216,12 @@ export function SignupPage({ onNavigate }: SignupPageProps) {
                 className="w-full bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white mt-6"
               >
                 {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Creating Account...
-                    </>
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating Account...
+                  </>
                 ) : (
-                    'Register'
+                  'Register'
                 )}
               </Button>
 

@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { useTheme } from './ThemeProvider';
-import { Plus, Edit, Trash2, CheckCircle2, XCircle } from 'lucide-react';
+import { Plus, Edit, Trash2, CheckCircle2, XCircle, FileDown } from 'lucide-react';
 import { toast } from 'sonner';
 
 import labAdminService from '../services/labAdminService';
@@ -38,14 +38,14 @@ interface TimeSlot {
 
 interface BookingRequest {
   id: string;
-  studentId?: string;
+  studentId?: string; // usually student_id/username string (AIU...)
   studentName: string;
   studentEmail: string;
   studentProfileId?: string | number;
-  userId?: string | number;
-  lab: string;       // this is lab_room name string
-  date: string;      // YYYY-MM-DD
-  timeSlot: string;  // may include spaces or seconds
+  userId?: string | number; // student User PK
+  lab: string;
+  date: string;
+  timeSlot: string;
   purpose: string;
   status: 'pending' | 'approved' | 'rejected' | string;
   requestedAt: string;
@@ -89,23 +89,89 @@ const getErrMsg = (e: any) =>
   e?.message ||
   'Request failed';
 
-// ✅ Normalize to serializer-required format: "HH:MM-HH:MM" (no seconds, spaces ok but removed)
+// ✅ Normalize to serializer-required format: "HH:MM-HH:MM"
 const normalizeTimeSlot = (raw: string) => {
   if (!raw) return '';
   const cleaned = String(raw).trim();
 
-  // split by dash
   const parts = cleaned.split('-');
   if (parts.length !== 2) return cleaned;
 
   const left = parts[0].trim();
   const right = parts[1].trim();
 
-  // take HH:MM from possibly "HH:MM:SS"
   const lHM = left.split(':').slice(0, 2).join(':');
   const rHM = right.split(':').slice(0, 2).join(':');
 
   return `${lHM}-${rHM}`;
+};
+
+// ✅ Extract a Student User ID safely (DO NOT use b.user.id)
+const extractStudentUserId = (b: any): string | number | undefined => {
+  // common explicit fields
+  const direct =
+    b.student_user_id ??
+    b.studentUserId ??
+    b.student_user ??
+    b.studentUser ??
+    b.student_id_user ??
+    null;
+
+  if (direct !== null && direct !== undefined) {
+    // could be number/string/object
+    if (typeof direct === 'number' || typeof direct === 'string') return direct;
+    if (typeof direct === 'object' && (direct.id !== undefined && direct.id !== null)) return direct.id;
+  }
+
+  // booking often has "student": <userId> OR {id, ...}
+  const student = b.student ?? null;
+  if (typeof student === 'number' || typeof student === 'string') return student;
+  if (typeof student === 'object' && student && (student.id !== undefined && student.id !== null)) return student.id;
+
+  return undefined;
+};
+
+// ✅ Extract Student Profile ID safely
+const extractStudentProfileId = (b: any): string | number | undefined => {
+  const pid =
+    b.student_profile_id ??
+    b.studentProfileId ??
+    b.student_profile ??
+    b.studentProfile ??
+    null;
+
+  if (pid === null || pid === undefined) return undefined;
+  if (typeof pid === 'number' || typeof pid === 'string') return pid;
+  if (typeof pid === 'object' && pid && (pid.id !== undefined && pid.id !== null)) return pid.id;
+
+  return undefined;
+};
+
+// ✅ Extract student display info safely (name/email)
+const extractStudentDisplay = (b: any) => {
+  // 1) explicit serializer fields if present
+  const nameFromFields = (b.student_name || b.studentName || '').trim();
+  const emailFromFields = (b.student_email || b.studentEmail || '').trim();
+
+  // 2) student object if included
+  const studentObj = typeof b.student === 'object' && b.student ? b.student : null;
+
+  const studentObjName =
+    studentObj
+      ? `${studentObj.first_name || ''} ${studentObj.last_name || ''}`.trim() || studentObj.username || ''
+      : '';
+
+  const studentObjEmail = studentObj?.email || '';
+
+  // 3) last resort: b.user (BUT only for name/email, NOT id)
+  const userObj = typeof b.user === 'object' && b.user ? b.user : null;
+  const userObjName = userObj ? `${userObj.first_name || ''} ${userObj.last_name || ''}`.trim() || userObj.username || '' : '';
+  const userObjEmail = userObj?.email || '';
+
+  const studentName = nameFromFields || studentObjName || userObjName || 'Student';
+  const studentEmail = emailFromFields || studentObjEmail || userObjEmail || '—';
+
+  return { studentName, studentEmail };
 };
 
 export function AdminLabManagement() {
@@ -122,6 +188,9 @@ export function AdminLabManagement() {
   const [rejectReason, setRejectReason] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // ✅ Export loading per-lab
+  const [exportingLabId, setExportingLabId] = useState<string | null>(null);
+
   // Form States
   const [newLabName, setNewLabName] = useState('');
   const [newLabCapacity, setNewLabCapacity] = useState('');
@@ -133,7 +202,7 @@ export function AdminLabManagement() {
     { id: '1', time: '08:00 - 10:00', available: true },
     { id: '2', time: '10:00 - 12:00', available: true },
     { id: '3', time: '14:00 - 16:00', available: true },
-    { id: '4', time: '16:00 - 18:00', available: true }
+    { id: '4', time: '16:00 - 18:00', available: true },
   ]);
   const [bookingRequests, setBookingRequests] = useState<BookingRequest[]>([]);
 
@@ -141,10 +210,7 @@ export function AdminLabManagement() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [labsRaw, bookingsRaw] = await Promise.all([
-        labAdminService.getLabs(),
-        labAdminService.getLabBookings(),
-      ]);
+      const [labsRaw, bookingsRaw] = await Promise.all([labAdminService.getLabs(), labAdminService.getLabBookings()]);
 
       const mappedLabs: Lab[] = normalizeList(labsRaw).map((l: any) => ({
         id: String(l.id),
@@ -156,15 +222,18 @@ export function AdminLabManagement() {
       setLabs(mappedLabs);
 
       const mappedBookings: BookingRequest[] = normalizeList(bookingsRaw).map((b: any) => {
-        const user = b.user || {};
-        const fullName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+        const { studentName, studentEmail } = extractStudentDisplay(b);
+
+        const studentProfileId = extractStudentProfileId(b);
+        const userId = extractStudentUserId(b);
+
         return {
           id: String(b.id),
-          studentId: b.student_id || b.studentId,
-          studentName: b.student_name || fullName || user.username || 'Student',
-          studentEmail: b.student_email || user.email || '—',
-          studentProfileId: b.student_profile_id || b.studentProfileId || b.student_profile,
-          userId: user.id || b.user_id || b.userId,
+          studentId: b.student_id || b.studentId, // usually AIU... or username
+          studentName,
+          studentEmail,
+          studentProfileId,
+          userId, // ✅ correct student user pk (not admin)
           lab: b.lab_room || b.lab || b.lab_name || 'Lab',
           date: safeDate(b.booking_date || b.date || b.bookingDay),
           timeSlot: b.time_slot || b.timeSlot || b.slot || '',
@@ -210,7 +279,9 @@ export function AdminLabManagement() {
       setLoading(true);
       await labAdminService.createLab({ name: newLabName, capacity: Number(newLabCapacity) });
       toast.success('Lab added successfully!');
-      setNewLabName(''); setNewLabCapacity(''); setIsAddLabDialogOpen(false);
+      setNewLabName('');
+      setNewLabCapacity('');
+      setIsAddLabDialogOpen(false);
       await loadAll();
     } catch (e: any) {
       toast.error(getErrMsg(e) || 'Failed to add lab');
@@ -219,7 +290,19 @@ export function AdminLabManagement() {
     }
   };
 
-  // ✅ Must send lab_room + date + time_slot because serializer validate() requires them
+  const handleExportLab = async (lab: Lab) => {
+    try {
+      setExportingLabId(lab.id);
+      toast.info('Generating report...');
+      await labAdminService.exportLabBookings(lab.id, lab.name);
+      toast.success('CSV downloaded');
+    } catch (e: any) {
+      toast.error(getErrMsg(e) || 'Export failed');
+    } finally {
+      setExportingLabId(null);
+    }
+  };
+
   const handleApproveRequest = async (req: BookingRequest) => {
     try {
       setLoading(true);
@@ -269,7 +352,9 @@ export function AdminLabManagement() {
       });
 
       toast.success('Booking rejected');
-      setRejectReason(''); setSelectedRequest(null); setIsRejectDialogOpen(false);
+      setRejectReason('');
+      setSelectedRequest(null);
+      setIsRejectDialogOpen(false);
       await loadAll();
     } catch (e: any) {
       toast.error(getErrMsg(e) || 'Failed to reject request');
@@ -278,22 +363,44 @@ export function AdminLabManagement() {
     }
   };
 
+  // ✅ FIXED: Fetch correct profile for the clicked row
   const openStudentProfile = async (request: BookingRequest) => {
     try {
       setLoading(true);
-      let profile = request.studentProfileId
-        ? await labAdminService.getStudentProfile(request.studentProfileId)
-        : request.userId ? await labAdminService.getStudentProfileByUserId(request.userId) : null;
+
+      let profile: any = null;
+
+      if (request.studentProfileId) {
+        profile = await labAdminService.getStudentProfile(request.studentProfileId);
+      } else if (request.userId) {
+        profile = await labAdminService.getStudentProfileByUserId(request.userId);
+      } else {
+        // no ids - show fallback
+        setSelectedStudent({
+          id: request.studentId || '—',
+          name: request.studentName || 'Student',
+          email: request.studentEmail || '—',
+          program: '—',
+          year: '—',
+          totalBookings: '—',
+          activeRentals: '—',
+        });
+        setIsStudentProfileOpen(true);
+        return;
+      }
+
+      const profileUser = profile?.user || {};
 
       setSelectedStudent({
         id: profile?.student_id || request.studentId || '—',
-        name: profile?.full_name || request.studentName,
-        email: profile?.email || request.studentEmail,
+        name: profile?.full_name || request.studentName || 'Student',
+        email: profileUser?.email || request.studentEmail || '—',
         program: profile?.program || '—',
         year: profile?.year || '—',
         totalBookings: profile?.total_bookings ?? '—',
         activeRentals: profile?.active_rentals ?? '—',
       });
+
       setIsStudentProfileOpen(true);
     } catch (e: any) {
       toast.error(getErrMsg(e) || 'Failed to load profile');
@@ -304,10 +411,17 @@ export function AdminLabManagement() {
 
   const getStatusColor = (status: string) => {
     switch (String(status).toLowerCase()) {
-      case 'available': case 'approved': return 'bg-teal-500/20 text-teal-400 border-teal-500/50';
-      case 'occupied': case 'pending': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
-      case 'maintenance': case 'rejected': return 'bg-red-500/20 text-red-400 border-red-500/50';
-      default: return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
+      case 'available':
+      case 'approved':
+        return 'bg-teal-500/20 text-teal-400 border-teal-500/50';
+      case 'occupied':
+      case 'pending':
+        return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
+      case 'maintenance':
+      case 'rejected':
+        return 'bg-red-500/20 text-red-400 border-red-500/50';
+      default:
+        return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
     }
   };
 
@@ -317,7 +431,9 @@ export function AdminLabManagement() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className={`text-2xl font-bold ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>Lab Booking Management</h1>
+        <h1 className={`text-2xl font-bold ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
+          Lab Booking Management
+        </h1>
         <p className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>Manage lab settings and requests</p>
       </div>
 
@@ -328,7 +444,6 @@ export function AdminLabManagement() {
         </TabsList>
 
         <TabsContent value="settings" className="space-y-6">
-          {/* Labs Table */}
           <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
@@ -356,11 +471,29 @@ export function AdminLabManagement() {
                       <TableCell className="font-medium">{lab.name}</TableCell>
                       <TableCell>{lab.capacity} seats</TableCell>
                       <TableCell>{lab.pcCount} Units</TableCell>
-                      <TableCell><Badge className={getStatusColor(lab.status)}>{lab.status}</Badge></TableCell>
+                      <TableCell>
+                        <Badge className={getStatusColor(lab.status)}>{lab.status}</Badge>
+                      </TableCell>
                       <TableCell>
                         <div className="flex gap-2">
-                          <Button size="sm" variant="ghost"><Edit className="h-4 w-4" /></Button>
-                          <Button size="sm" variant="ghost" className="text-red-400"><Trash2 className="h-4 w-4" /></Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-blue-500 hover:text-blue-600"
+                            title="Download Requests/Responses CSV"
+                            onClick={() => handleExportLab(lab)}
+                            disabled={exportingLabId === lab.id}
+                          >
+                            <FileDown className={`h-4 w-4 ${exportingLabId === lab.id ? 'animate-pulse' : ''}`} />
+                          </Button>
+
+                          <Button size="sm" variant="ghost">
+                            <Edit className="h-4 w-4" />
+                          </Button>
+
+                          <Button size="sm" variant="ghost" className="text-red-400">
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -406,7 +539,9 @@ export function AdminLabManagement() {
                           <p className="text-xs text-gray-500">{req.timeSlot}</p>
                         </TableCell>
                         <TableCell className="max-w-[150px] truncate text-gray-500">{req.purpose}</TableCell>
-                        <TableCell><Badge className={getStatusColor(req.status)}>{req.status}</Badge></TableCell>
+                        <TableCell>
+                          <Badge className={getStatusColor(req.status)}>{req.status}</Badge>
+                        </TableCell>
                         <TableCell>
                           <div className="flex gap-2">
                             {statusLower === 'pending' && (
@@ -421,7 +556,10 @@ export function AdminLabManagement() {
                                 </Button>
                                 <Button
                                   size="sm"
-                                  onClick={() => { setSelectedRequest(req); setIsRejectDialogOpen(true); }}
+                                  onClick={() => {
+                                    setSelectedRequest(req);
+                                    setIsRejectDialogOpen(true);
+                                  }}
                                   className="bg-red-500/10 text-red-500 hover:bg-red-500/20"
                                   disabled={loading}
                                 >
@@ -444,14 +582,20 @@ export function AdminLabManagement() {
       {/* REJECT DIALOG */}
       <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
         <DialogContent className={theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}>
-          <DialogHeader><DialogTitle>Reject Booking</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Reject Booking</DialogTitle>
+          </DialogHeader>
           <div className="py-4 space-y-2">
             <Label>Reason for rejection</Label>
             <Textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Explain why..." />
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setIsRejectDialogOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleRejectRequest} disabled={loading}>Reject</Button>
+            <Button variant="outline" onClick={() => setIsRejectDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleRejectRequest} disabled={loading}>
+              Reject
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -459,12 +603,14 @@ export function AdminLabManagement() {
       {/* STUDENT PROFILE DIALOG */}
       <Dialog open={isStudentProfileOpen} onOpenChange={setIsStudentProfileOpen}>
         <DialogContent className={theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}>
-          <DialogHeader><DialogTitle>Student Details</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Student Details</DialogTitle>
+          </DialogHeader>
           {selectedStudent && (
             <div className="space-y-4">
               <div className="flex items-center gap-4 p-4 rounded-lg bg-teal-500/10">
                 <div className="h-12 w-12 rounded-full bg-teal-500 flex items-center justify-center text-white font-bold text-xl">
-                  {selectedStudent.name[0]}
+                  {String(selectedStudent.name || 'S')[0]}
                 </div>
                 <div>
                   <h3 className="font-bold">{selectedStudent.name}</h3>
@@ -472,10 +618,22 @@ export function AdminLabManagement() {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4 text-sm">
-                <div><Label className="text-xs text-gray-500">Program</Label><p>{selectedStudent.program}</p></div>
-                <div><Label className="text-xs text-gray-500">Year</Label><p>{selectedStudent.year}</p></div>
-                <div className="p-3 border rounded-lg"><p className="text-xs text-gray-500">Total Bookings</p><p className="text-lg font-bold">{selectedStudent.totalBookings}</p></div>
-                <div className="p-3 border rounded-lg"><p className="text-xs text-gray-500">Active Rentals</p><p className="text-lg font-bold">{selectedStudent.activeRentals}</p></div>
+                <div>
+                  <Label className="text-xs text-gray-500">Program</Label>
+                  <p>{selectedStudent.program}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-gray-500">Year</Label>
+                  <p>{selectedStudent.year}</p>
+                </div>
+                <div className="p-3 border rounded-lg">
+                  <p className="text-xs text-gray-500">Total Bookings</p>
+                  <p className="text-lg font-bold">{selectedStudent.totalBookings}</p>
+                </div>
+                <div className="p-3 border rounded-lg">
+                  <p className="text-xs text-gray-500">Active Rentals</p>
+                  <p className="text-lg font-bold">{selectedStudent.activeRentals}</p>
+                </div>
               </div>
             </div>
           )}
@@ -485,7 +643,9 @@ export function AdminLabManagement() {
       {/* ADD LAB DIALOG */}
       <Dialog open={isAddLabDialogOpen} onOpenChange={setIsAddLabDialogOpen}>
         <DialogContent className={theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}>
-          <DialogHeader><DialogTitle>Add New Lab</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Add New Lab</DialogTitle>
+          </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>Lab Name</Label>
@@ -493,12 +653,21 @@ export function AdminLabManagement() {
             </div>
             <div className="space-y-2">
               <Label>Capacity</Label>
-              <Input type="number" value={newLabCapacity} onChange={(e) => setNewLabCapacity(e.target.value)} placeholder="30" />
+              <Input
+                type="number"
+                value={newLabCapacity}
+                onChange={(e) => setNewLabCapacity(e.target.value)}
+                placeholder="30"
+              />
             </div>
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setIsAddLabDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleAddLab} className="bg-teal-500 text-white" disabled={loading}>Create Lab</Button>
+            <Button variant="outline" onClick={() => setIsAddLabDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleAddLab} className="bg-teal-500 text-white" disabled={loading}>
+              Create Lab
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

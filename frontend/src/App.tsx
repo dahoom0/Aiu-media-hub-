@@ -201,7 +201,7 @@ export default function App() {
       case 'admin-equipment':
         return (
           <DashboardLayout activePage="admin-equipment" onNavigate={handleNavigate} isAdmin={true}>
-            <AdminEquipmentManagement />
+            <AdminEquipmentManagement onNavigate={handleNavigate} />
           </DashboardLayout>
         );
 

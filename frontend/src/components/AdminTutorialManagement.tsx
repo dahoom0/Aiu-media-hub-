@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Checkbox } from './ui/checkbox';
 import { useTheme } from './ThemeProvider';
-import { Upload, Link, Youtube, Edit, Trash2 } from 'lucide-react';
+import { Upload, Link, Youtube, Edit, Trash2, FileDown } from 'lucide-react';
 import { toast } from 'sonner';
 
 import tutorialAdminService from '../services/tutorialAdminService';
@@ -80,8 +80,6 @@ const levelToUi = (v: any): 'Beginner' | 'Intermediate' | 'Advanced' => {
 };
 
 const extractCategoryId = (t: any): string => {
-  // TutorialSerializer: category is FK id in API (usually number)
-  // But sometimes list endpoints return nested objects; handle both.
   const c = t?.category;
   if (typeof c === 'number' || typeof c === 'string') return String(c);
   if (typeof c === 'object' && c?.id !== undefined && c?.id !== null) return String(c.id);
@@ -90,7 +88,6 @@ const extractCategoryId = (t: any): string => {
 };
 
 const extractEquipmentIds = (t: any): string[] => {
-  // Your backend naming can vary; try common keys.
   const raw =
     t?.equipment_ids ||
     t?.equipments ||
@@ -117,19 +114,13 @@ export function AdminTutorialManagement() {
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   const [uploadStep, setUploadStep] = useState<1 | 2 | 3>(1);
 
-  // ✅ NEW: edit mode state (logic only)
   const [editingTutorialId, setEditingTutorialId] = useState<string | number | null>(null);
 
-  // Upload form state (UI unchanged)
   const [sourceType, setSourceType] = useState<'drive' | 'youtube'>('youtube');
   const [tutorialTitle, setTutorialTitle] = useState('');
   const [tutorialDescription, setTutorialDescription] = useState('');
 
-  // Backend Category ID (NOT "general/equipment")
   const [tutorialCategoryId, setTutorialCategoryId] = useState<string>('');
-
-  // ✅ Duration + Level (matches Django admin)
-  // UI shows "Beginner/Intermediate/Advanced" but service maps to backend choice values
   const [tutorialDuration, setTutorialDuration] = useState<string>('0');
   const [tutorialLevel, setTutorialLevel] = useState<'Beginner' | 'Intermediate' | 'Advanced'>('Beginner');
 
@@ -137,12 +128,12 @@ export function AdminTutorialManagement() {
   const [videoUrl, setVideoUrl] = useState('');
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
 
-  // Backend data
   const [tutorials, setTutorials] = useState<TutorialRow[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [equipments, setEquipments] = useState<Equipment[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingWizardData, setLoadingWizardData] = useState(false);
+  const [isExporting, setIsExporting] = useState<string | number | null>(null);
 
   const loadTutorials = async () => {
     setLoading(true);
@@ -199,7 +190,6 @@ export function AdminTutorialManagement() {
     if (isUploadDialogOpen) {
       loadWizardData();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isUploadDialogOpen]);
 
   const resetUploadForm = () => {
@@ -219,18 +209,11 @@ export function AdminTutorialManagement() {
   const handleEdit = async (id: string | number) => {
     try {
       setLoading(true);
-
-      // Open dialog + switch to edit mode
       setEditingTutorialId(id);
       setIsUploadDialogOpen(true);
-
-      // Start at Details step for editing (admin-like behavior)
       setUploadStep(2);
 
-      // Ensure categories/equipments are loaded for dropdown + checklist
       await loadWizardData();
-
-      // Fetch full tutorial details for prefill
       const detail = await tutorialAdminService.getById(id);
 
       setTutorialTitle(detail?.title || '');
@@ -246,16 +229,10 @@ export function AdminTutorialManagement() {
       );
 
       setTutorialLevel(levelToUi(detail?.level));
-
       setSelectedEquipment(extractEquipmentIds(detail));
-
-      // Important: do NOT set thumbnailFile when editing existing tutorial unless user picks a new file.
-      // Keep as null so update will send JSON unless user selects a new file.
       setThumbnailFile(null);
     } catch (e: any) {
-      console.error('Edit prefill failed:', e?.response?.data || e);
       toast.error('Failed to load tutorial for editing');
-      // If we fail, exit edit mode safely
       setEditingTutorialId(null);
       setIsUploadDialogOpen(false);
     } finally {
@@ -263,8 +240,23 @@ export function AdminTutorialManagement() {
     }
   };
 
+  /**
+   * ✅ NEW: Handle CSV Export
+   */
+  const handleExport = async (id: string | number) => {
+    try {
+      setIsExporting(id);
+      toast.info('Generating completions report...');
+      await tutorialAdminService.exportCompletedStudents(id);
+      toast.success('Report downloaded successfully');
+    } catch (error) {
+      toast.error('Failed to export student list');
+    } finally {
+      setIsExporting(null);
+    }
+  };
+
   const handleUploadSubmit = async () => {
-    // Step 1 Validation: URL
     if (uploadStep === 1) {
       if (!videoUrl) {
         toast.error('Please enter a video URL');
@@ -274,7 +266,6 @@ export function AdminTutorialManagement() {
       return;
     }
 
-    // Step 2 Validation
     if (uploadStep === 2) {
       if (!tutorialTitle || !tutorialDescription) {
         toast.error('Title and Description are required');
@@ -289,18 +280,15 @@ export function AdminTutorialManagement() {
         toast.error('Please enter a valid duration (minutes)');
         return;
       }
-      // Step 3 optional in your flow
     }
 
-    // Final Submission (Create or Edit)
     try {
       setLoading(true);
-
       const payload = {
         title: tutorialTitle,
         description: tutorialDescription,
-        categoryId: tutorialCategoryId, // service maps -> category
-        videoUrl: videoUrl, // service maps -> video_url
+        categoryId: tutorialCategoryId,
+        videoUrl: videoUrl,
         duration: tutorialDuration,
         level: tutorialLevel,
         thumbnail: thumbnailFile,
@@ -321,7 +309,6 @@ export function AdminTutorialManagement() {
       await loadTutorials();
     } catch (e: any) {
       const data = e?.response?.data;
-      console.error('Submit error:', data || e);
       toast.error(data ? JSON.stringify(data) : (e.message || 'Failed to submit tutorial'));
     } finally {
       setLoading(false);
@@ -369,7 +356,6 @@ export function AdminTutorialManagement() {
             </DialogHeader>
 
             <div className="space-y-4 py-4">
-              {/* Step 1: Source */}
               {uploadStep === 1 && (
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
@@ -400,7 +386,6 @@ export function AdminTutorialManagement() {
                 </div>
               )}
 
-              {/* Step 2: Details */}
               {uploadStep === 2 && (
                 <div className="space-y-4">
                   <div className="space-y-2">
@@ -432,10 +417,6 @@ export function AdminTutorialManagement() {
                           ))}
                         </SelectContent>
                       </Select>
-
-                      <div className="text-xs opacity-70">
-                        Pick a real backend category (matches Django Admin).
-                      </div>
                     </div>
 
                     <div className="space-y-2">
@@ -444,7 +425,6 @@ export function AdminTutorialManagement() {
                     </div>
                   </div>
 
-                  {/* ✅ Duration + Level (same layout grid, no styling changes) */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Duration (minutes)</Label>
@@ -473,11 +453,9 @@ export function AdminTutorialManagement() {
                 </div>
               )}
 
-              {/* Step 3: Equipment Link */}
               {uploadStep === 3 && (
                 <div className="space-y-4 max-h-60 overflow-y-auto">
                   <Label>Select Related Equipment</Label>
-
                   {loadingWizardData ? (
                     <div className="text-sm opacity-70">Loading equipments...</div>
                   ) : (
@@ -517,9 +495,8 @@ export function AdminTutorialManagement() {
                 <Button variant="outline" onClick={() => setIsUploadDialogOpen(false)}>
                   Cancel
                 </Button>
-
                 <Button onClick={handleUploadSubmit} disabled={loading}>
-                  {uploadStep === 1 ? 'Next' : uploadStep === 3 ? 'Publish' : 'Publish'}
+                  {uploadStep === 1 ? 'Next' : 'Publish'}
                 </Button>
               </div>
             </div>
@@ -551,9 +528,22 @@ export function AdminTutorialManagement() {
                   <TableCell>{t.dateAdded}</TableCell>
                   <TableCell>
                     <div className="flex gap-1">
+                      {/* ✅ Export completions button */}
+                      <Button 
+                        size="icon" 
+                        variant="ghost" 
+                        className="text-blue-500 hover:text-blue-600" 
+                        title="Export Student Completions"
+                        onClick={() => handleExport(t.id)}
+                        disabled={isExporting === t.id}
+                      >
+                        <FileDown className={`h-4 w-4 ${isExporting === t.id ? 'animate-pulse' : ''}`} />
+                      </Button>
+
                       <Button size="icon" variant="ghost" onClick={() => handleEdit(t.id)}>
                         <Edit className="h-4 w-4" />
                       </Button>
+                      
                       <Button size="icon" variant="ghost" className="text-red-500" onClick={() => handleDelete(t.id)}>
                         <Trash2 className="h-4 w-4" />
                       </Button>

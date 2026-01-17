@@ -37,7 +37,6 @@ router.register(r'references', views.ReferenceViewSet, basename='reference')
 router.register(r'languages', views.LanguageViewSet, basename='language')
 router.register(r'awards', views.AwardViewSet, basename='award')
 
-
 urlpatterns = [
     # Auth endpoints
     path('auth/register/', views.register, name='register'),

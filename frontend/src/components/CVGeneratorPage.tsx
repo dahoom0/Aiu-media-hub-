@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+// src/components/CVGeneratorPage.tsx
+import React, { useEffect, useState } from 'react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -43,6 +44,7 @@ type Step =
   | 'skills'
   | 'certifications'
   | 'languages'
+  | 'leadership' // ✅ NEW
   | 'awards'
   | 'projects'
   | 'references'
@@ -105,6 +107,16 @@ interface Reference {
   email: string;
 }
 
+// ✅ NEW: Involvement/Leadership
+interface Involvement {
+  id: string;
+  role: string;
+  organization: string;
+  year: string;
+  description: string;
+  order: number;
+}
+
 export function CVGeneratorPage() {
   const { theme } = useTheme();
   const [currentStep, setCurrentStep] = useState<Step>('personal');
@@ -142,6 +154,9 @@ export function CVGeneratorPage() {
   // Languages State
   const [languages, setLanguages] = useState<Language[]>([]);
 
+  // ✅ NEW: Leadership/Involvements State
+  const [involvements, setInvolvements] = useState<Involvement[]>([]);
+
   // Awards State
   const [awards, setAwards] = useState<AwardType[]>([]);
 
@@ -161,6 +176,286 @@ export function CVGeneratorPage() {
 
   const proficiencyLevels = ['Native', 'Fluent', 'Advanced', 'Intermediate', 'Basic'];
 
+  // -----------------------------
+  // Helpers
+  // -----------------------------
+  const safeNumId = (id: string) => {
+    const n = Number(id);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const normalizeList = (data: any) => {
+    // supports DRF pagination: {results: [...]}
+    if (!data) return [];
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.results)) return data.results;
+    if (typeof data === 'object') return [data];
+    return [];
+  };
+
+  // --- Helper: apply backend CV data into state (used on load + after save refresh) ---
+  const applyCvDataToState = (cvData: any, u: any) => {
+    if (!cvData) return;
+
+    setCvId(cvData.id);
+
+    // Personal
+    setFullName(cvData.full_name || `${u.first_name || ''} ${u.last_name || ''}`.trim());
+    setHeadline(cvData.title || '');
+    setSummary(cvData.summary || '');
+
+    // Contact
+    setEmail(cvData.email || u.email || '');
+    setPhone(cvData.phone || u.phone || '');
+    setLocation(cvData.location || '');
+    setLinkedin(cvData.linkedin || '');
+    setWebsite(cvData.portfolio_website || '');
+
+    // Photo
+    if (cvData.profile_image) {
+      setProfilePhoto(cvData.profile_image);
+    } else if (u.profile_picture) {
+      setProfilePhoto(u.profile_picture);
+    } else {
+      setProfilePhoto('');
+    }
+
+    // Education (if backend embeds)
+    setEducation(
+      (cvData.education || []).map((e: any) => ({
+        id: e.id?.toString?.() ?? '',
+        degree: e.degree || '',
+        institution: e.institution || '',
+        startDate: e.start_date || '',
+        endDate: e.end_date || '',
+        description: e.description || '',
+      }))
+    );
+
+    // Experience (if backend embeds)
+    setExperiences(
+      (cvData.experience || []).map((e: any) => ({
+        id: e.id?.toString?.() ?? '',
+        position: e.position || '',
+        company: e.company || '',
+        location: e.location || '',
+        startDate: e.start_date || '',
+        endDate: e.end_date || '',
+        description: e.description || '',
+      }))
+    );
+
+    // Skills (if backend embeds)
+    setSkills((cvData.skills || []).map((s: any) => s?.name).filter(Boolean));
+
+    // Projects (if backend embeds)
+    setProjects(
+      (cvData.projects || []).map((p: any) => ({
+        id: p.id?.toString?.() ?? '',
+        name: p.name || '',
+        description: p.description || '',
+        technologies: p.technologies || '',
+      }))
+    );
+
+    // References (if backend embeds)
+    setReferences(
+      (cvData.references || []).map((r: any) => ({
+        id: r.id?.toString?.() ?? '',
+        name: r.name || '',
+        position: r.position || '',
+        workplace: r.workplace || '',
+        phone: r.phone || '',
+        email: r.email || '',
+      }))
+    );
+
+    // Certifications (if backend embeds)
+    setCertifications(
+      (cvData.certifications || []).map((c: any) => ({
+        id: c.id?.toString?.() ?? '',
+        name: c.name || '',
+        issuer: c.issuer || '',
+        date: c.year || '',
+      }))
+    );
+
+    // Languages (if backend embeds)
+    setLanguages(
+      (cvData.languages || []).map((l: any) => ({
+        id: l.id?.toString?.() ?? '',
+        language: l.name || '',
+        proficiency: l.proficiency || '',
+      }))
+    );
+
+    // ✅ NEW: Involvements (if backend embeds)
+    setInvolvements(
+      (cvData.involvements || cvData.involvement || []).map((inv: any) => ({
+        id: inv.id?.toString?.() ?? '',
+        role: inv.role || '',
+        organization: inv.organization || '',
+        year: inv.year || '',
+        description: inv.description || '',
+        order: typeof inv.order === 'number' ? inv.order : Number(inv.order || 0) || 0,
+      }))
+    );
+
+    // Awards (if backend embeds)
+    setAwards(
+      (cvData.awards || []).map((a: any) => ({
+        id: a.id?.toString?.() ?? '',
+        title: a.title || '',
+        issuer: a.issuer || '',
+        date: a.year || '',
+        description: a.description || '',
+      }))
+    );
+  };
+
+  // ✅ NEW: always load lists from their own endpoints
+  const loadAllSections = async () => {
+    const svc: any = cvService as any;
+
+    const calls = await Promise.allSettled([
+      svc.listEducation?.(),
+      svc.listExperience?.(),
+      svc.listProjects?.(),
+      svc.listReferences?.(),
+      svc.listCertifications?.(),
+      svc.listLanguages?.(),
+      svc.listAwards?.(),
+      svc.listSkills?.(),
+      svc.listInvolvements?.(), // ✅ NEW
+    ]);
+
+    const getVal = (idx: number) =>
+      calls[idx].status === 'fulfilled' ? (calls[idx] as PromiseFulfilledResult<any>).value : null;
+
+    const eduRes = getVal(0);
+    const expRes = getVal(1);
+    const projRes = getVal(2);
+    const refRes = getVal(3);
+    const certRes = getVal(4);
+    const langRes = getVal(5);
+    const awardRes = getVal(6);
+    const skillRes = getVal(7);
+    const invRes = getVal(8); // ✅ NEW
+
+    const eduList = normalizeList(eduRes);
+    const expList = normalizeList(expRes);
+    const projList = normalizeList(projRes);
+    const refList = normalizeList(refRes);
+    const certList = normalizeList(certRes);
+    const langList = normalizeList(langRes);
+    const awardList = normalizeList(awardRes);
+    const skillList = normalizeList(skillRes);
+    const invList = normalizeList(invRes);
+
+    if (eduList.length) {
+      setEducation(
+        eduList.map((e: any) => ({
+          id: e.id?.toString?.() ?? '',
+          degree: e.degree || '',
+          institution: e.institution || '',
+          startDate: e.start_date || '',
+          endDate: e.end_date || '',
+          description: e.description || '',
+        }))
+      );
+    }
+
+    if (expList.length) {
+      setExperiences(
+        expList.map((e: any) => ({
+          id: e.id?.toString?.() ?? '',
+          position: e.position || '',
+          company: e.company || '',
+          location: e.location || '',
+          startDate: e.start_date || '',
+          endDate: e.end_date || '',
+          description: e.description || '',
+        }))
+      );
+    }
+
+    if (projList.length) {
+      setProjects(
+        projList.map((p: any) => ({
+          id: p.id?.toString?.() ?? '',
+          name: p.name || '',
+          description: p.description || '',
+          technologies: p.technologies || '',
+        }))
+      );
+    }
+
+    if (refList.length) {
+      setReferences(
+        refList.map((r: any) => ({
+          id: r.id?.toString?.() ?? '',
+          name: r.name || '',
+          position: r.position || '',
+          workplace: r.workplace || '',
+          phone: r.phone || '',
+          email: r.email || '',
+        }))
+      );
+    }
+
+    if (certList.length) {
+      setCertifications(
+        certList.map((c: any) => ({
+          id: c.id?.toString?.() ?? '',
+          name: c.name || '',
+          issuer: c.issuer || '',
+          date: c.year || '',
+        }))
+      );
+    }
+
+    if (langList.length) {
+      setLanguages(
+        langList.map((l: any) => ({
+          id: l.id?.toString?.() ?? '',
+          language: l.name || '',
+          proficiency: l.proficiency || '',
+        }))
+      );
+    }
+
+    if (awardList.length) {
+      setAwards(
+        awardList.map((a: any) => ({
+          id: a.id?.toString?.() ?? '',
+          title: a.title || '',
+          issuer: a.issuer || '',
+          date: a.year || '',
+          description: a.description || '',
+        }))
+      );
+    }
+
+    if (skillList.length) {
+      const names = skillList.map((s: any) => s?.name).filter(Boolean);
+      if (names.length) setSkills(names);
+    }
+
+    // ✅ NEW: involvements list
+    if (invList.length) {
+      setInvolvements(
+        invList.map((inv: any) => ({
+          id: inv.id?.toString?.() ?? '',
+          role: inv.role || '',
+          organization: inv.organization || '',
+          year: inv.year || '',
+          description: inv.description || '',
+          order: typeof inv.order === 'number' ? inv.order : Number(inv.order || 0) || 0,
+        }))
+      );
+    }
+  };
+
   // --- FETCH DATA ON MOUNT ---
   useEffect(() => {
     const fetchData = async () => {
@@ -169,140 +464,23 @@ export function CVGeneratorPage() {
 
         // 1. Get User Profile (for defaults)
         const userRes = await authService.getProfile();
-        const u = userRes.user || userRes;
+        const u = (userRes as any)?.user || userRes;
 
         // 2. Get CV Data
         const cvData = await cvService.getMyCV();
 
         if (cvData) {
-          setCvId(cvData.id);
-
-          // Personal
-          setFullName(
-            cvData.full_name || `${u.first_name || ''} ${u.last_name || ''}`.trim()
-          );
-          setHeadline(cvData.title || '');
-          setSummary(cvData.summary || '');
-
-          // Contact
-          setEmail(cvData.email || u.email || '');
-          setPhone(cvData.phone || u.phone || '');
-          setLocation(cvData.location || '');
-          setLinkedin(cvData.linkedin || '');
-          setWebsite(cvData.portfolio_website || '');
-
-          // CV profile image is the main source for photo
-          if (cvData.profile_image) {
-            setProfilePhoto(cvData.profile_image);
-          } else if (u.profile_picture) {
-            // optional fallback from user photo if CV doesn't have one yet
-            setProfilePhoto(u.profile_picture);
-          }
-
-          // Education
-          if (cvData.education) {
-            setEducation(
-              cvData.education.map((e: any) => ({
-                id: e.id.toString(),
-                degree: e.degree,
-                institution: e.institution,
-                startDate: e.start_date,
-                endDate: e.end_date,
-                description: e.description || '',
-              }))
-            );
-          }
-
-          // Experience
-          if (cvData.experience) {
-            setExperiences(
-              cvData.experience.map((e: any) => ({
-                id: e.id.toString(),
-                position: e.position,
-                company: e.company,
-                location: e.location || '',
-                startDate: e.start_date,
-                endDate: e.end_date,
-                description: e.description || '',
-              }))
-            );
-          }
-
-          // Skills
-          if (cvData.skills) {
-            setSkills(cvData.skills.map((s: any) => s.name));
-          }
-
-          // Projects
-          if (cvData.projects) {
-            setProjects(
-              cvData.projects.map((p: any) => ({
-                id: p.id.toString(),
-                name: p.name,
-                description: p.description,
-                technologies: p.technologies || '',
-              }))
-            );
-          }
-
-          // References
-          if (cvData.references) {
-            setReferences(
-              cvData.references.map((r: any) => ({
-                id: r.id.toString(),
-                name: r.name,
-                position: r.position,
-                workplace: r.workplace,
-                phone: r.phone,
-                email: r.email,
-              }))
-            );
-          }
-
-          // Certifications
-          if (cvData.certifications) {
-            setCertifications(
-              cvData.certifications.map((c: any) => ({
-                id: c.id.toString(),
-                name: c.name,
-                issuer: c.issuer,
-                date: c.year,
-              }))
-            );
-          }
-
-          // Languages
-          if (cvData.languages) {
-            setLanguages(
-              cvData.languages.map((l: any) => ({
-                id: l.id.toString(),
-                language: l.name,
-                proficiency: l.proficiency,
-              }))
-            );
-          }
-
-          // Awards
-          if (cvData.awards) {
-            setAwards(
-              cvData.awards.map((a: any) => ({
-                id: a.id.toString(),
-                title: a.title,
-                issuer: a.issuer,
-                date: a.year,
-                description: a.description || '',
-              }))
-            );
-          }
+          applyCvDataToState(cvData, u);
         } else {
           // No CV yet – use profile defaults
           setFullName(`${u.first_name || ''} ${u.last_name || ''}`.trim());
           setEmail(u.email || '');
           setPhone(u.phone || '');
-          if (u.profile_picture) {
-            setProfilePhoto(u.profile_picture);
-          }
+          if (u.profile_picture) setProfilePhoto(u.profile_picture);
         }
+
+        // ✅ Always also load section endpoints
+        await loadAllSections();
       } catch (err) {
         console.error('Failed to load CV data', err);
       } finally {
@@ -314,12 +492,14 @@ export function CVGeneratorPage() {
   }, []);
 
   // --- SAVE HANDLER ---
-  const handleSave = async () => {
+  const handleSave = async (opts?: { silent?: boolean }) => {
+    const silent = !!opts?.silent;
+
     try {
       setSaving(true);
 
       // 1. Save base CV
-      const basePayload = {
+      const basePayload: any = {
         id: cvId,
         full_name: fullName,
         title: headline,
@@ -332,7 +512,8 @@ export function CVGeneratorPage() {
       };
 
       const savedCV = await cvService.saveCV(basePayload);
-      if (!cvId) setCvId(savedCV.id);
+      const savedId = savedCV?.id;
+      if (!cvId && savedId) setCvId(savedId);
 
       // 2. Save new list items (those with temp- IDs)
       for (const item of education) {
@@ -392,42 +573,53 @@ export function CVGeneratorPage() {
         }
       }
 
-      // Languages
-      if (cvService.addLanguage) {
+      // Languages (optional service)
+      if ((cvService as any).addLanguage) {
         for (const item of languages) {
           if (item.id.includes('temp-')) {
-            try {
-              await cvService.addLanguage({
-                name: item.language,
-                proficiency: item.proficiency,
-              });
-            } catch {
-              // ignore duplicates or errors
-            }
+            await (cvService as any).addLanguage({
+              name: item.language,
+              proficiency: item.proficiency,
+            });
           }
         }
       }
 
-      // Awards
-      if (cvService.addAward) {
+      // ✅ NEW: Involvements/Leadership (optional service)
+      if ((cvService as any).addInvolvement) {
+        for (const item of involvements) {
+          if (item.id.includes('temp-')) {
+            await (cvService as any).addInvolvement({
+              role: item.role,
+              organization: item.organization,
+              year: item.year,
+              description: item.description,
+              order: item.order ?? 0,
+            });
+          }
+        }
+      }
+
+      // Awards (optional service)
+      if ((cvService as any).addAward) {
         for (const item of awards) {
           if (item.id.includes('temp-')) {
-            try {
-              await cvService.addAward({
-                title: item.title,
-                issuer: item.issuer,
-                year: item.date,
-                description: item.description,
-              });
-            } catch {
-              // ignore duplicates or errors
-            }
+            await (cvService as any).addAward({
+              title: item.title,
+              issuer: item.issuer,
+              year: item.date,
+              description: item.description,
+            });
           }
         }
       }
 
-      // Skills – backend handles duplicates
-      for (const skill of skills) {
+      // ✅ Skills: send unique only (avoid duplicates)
+      const uniqueSkills = Array.from(
+        new Map(skills.map((s) => [s.trim().toLowerCase(), s.trim()])).values()
+      ).filter(Boolean);
+
+      for (const skill of uniqueSkills) {
         try {
           await cvService.addSkill({ name: skill });
         } catch {
@@ -435,12 +627,41 @@ export function CVGeneratorPage() {
         }
       }
 
-      alert('Saved successfully!');
+      // refresh CV from backend
+      try {
+        const userRes = await authService.getProfile();
+        const u = (userRes as any)?.user || userRes;
+        const refreshed = await cvService.getMyCV();
+        if (refreshed) applyCvDataToState(refreshed, u);
+      } catch (e) {
+        console.warn('Saved but failed to refresh CV data', e);
+      }
+
+      // reload section endpoints
+      try {
+        await loadAllSections();
+      } catch (e) {
+        console.warn('Saved but failed to reload section endpoints', e);
+      }
+
+      if (!silent) alert('Saved successfully!');
+      return true;
     } catch (err) {
       console.error('Save failed', err);
-      alert('Failed to save changes.');
+      if (!silent) alert('Failed to save changes.');
+      return false;
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ✅ Backend PDF download
+  const handleDownloadPdf = async () => {
+    try {
+      await cvService.downloadMyCVPdf('My_CV.pdf');
+    } catch (e) {
+      console.error('PDF download failed', e);
+      alert('Failed to download PDF.');
     }
   };
 
@@ -458,23 +679,19 @@ export function CVGeneratorPage() {
   };
 
   const handleCropComplete = async (croppedImageUrl: string) => {
-    // Update UI immediately
     setProfilePhoto(croppedImageUrl);
     setTempImageUrl(null);
     setIsCropDialogOpen(false);
 
     try {
-      // Ensure we have a CV id
       let id = cvId;
 
       if (!id) {
-        // Try to fetch existing CV
         const existing = await cvService.getMyCV();
         if (existing?.id) {
           id = existing.id;
           setCvId(existing.id);
         } else {
-          // As a fallback, create a minimal CV so the image has somewhere to go
           const created = await cvService.saveCV({
             full_name: fullName || '',
             title: headline || '',
@@ -495,18 +712,46 @@ export function CVGeneratorPage() {
         return;
       }
 
-      // Convert data URL into a File object
       const res = await fetch(croppedImageUrl);
       const blob = await res.blob();
       const file = new File([blob], 'profile.jpg', {
         type: blob.type || 'image/jpeg',
       });
 
-      // Upload directly to CV.profile_image via cvService
       await cvService.uploadProfileImage(id, file);
+
+      try {
+        const userRes = await authService.getProfile();
+        const u = (userRes as any)?.user || userRes;
+        const refreshed = await cvService.getMyCV();
+        if (refreshed) applyCvDataToState(refreshed, u);
+      } catch {
+        // ignore
+      }
     } catch (e) {
       console.error('CV profile photo upload failed', e);
       alert('Failed to upload CV photo.');
+    }
+  };
+
+  const handleRemovePhoto = async () => {
+    setProfilePhoto('');
+
+    try {
+      if (cvId && (cvService as any).clearProfileImage) {
+        await (cvService as any).clearProfileImage(cvId);
+        return;
+      }
+
+      if (cvId) {
+        try {
+          await cvService.saveCV({ id: cvId, profile_image: null } as any);
+        } catch {
+          await cvService.saveCV({ id: cvId, profile_image: '' } as any);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to clear profile photo on backend (UI cleared)', e);
     }
   };
 
@@ -590,6 +835,7 @@ export function CVGeneratorPage() {
     { id: 'skills' as Step, label: 'Skills', icon: Code },
     { id: 'certifications' as Step, label: 'Certifications', icon: Award },
     { id: 'languages' as Step, label: 'Languages', icon: Globe },
+    { id: 'leadership' as Step, label: 'Leadership', icon: Users }, // ✅ NEW
     { id: 'awards' as Step, label: 'Awards', icon: Trophy },
     { id: 'projects' as Step, label: 'Projects', icon: FolderOpen },
     { id: 'references' as Step, label: 'References', icon: Users },
@@ -616,10 +862,13 @@ export function CVGeneratorPage() {
 
   const deleteEducation = async (id: string) => {
     if (!id.includes('temp-')) {
-      try {
-        await cvService.deleteEducation(Number(id));
-      } catch (e) {
-        console.error('Failed to delete education', e);
+      const num = safeNumId(id);
+      if (num !== null) {
+        try {
+          await cvService.deleteEducation(num);
+        } catch (e) {
+          console.error('Failed to delete education', e);
+        }
       }
     }
     setEducation(education.filter((edu) => edu.id !== id));
@@ -645,10 +894,13 @@ export function CVGeneratorPage() {
 
   const deleteExperience = async (id: string) => {
     if (!id.includes('temp-')) {
-      try {
-        await cvService.deleteExperience(Number(id));
-      } catch (e) {
-        console.error('Failed to delete experience', e);
+      const num = safeNumId(id);
+      if (num !== null) {
+        try {
+          await cvService.deleteExperience(num);
+        } catch (e) {
+          console.error('Failed to delete experience', e);
+        }
       }
     }
     setExperiences(experiences.filter((exp) => exp.id !== id));
@@ -656,10 +908,14 @@ export function CVGeneratorPage() {
 
   // Skills functions
   const addSkill = () => {
-    if (skillInput.trim()) {
-      setSkills([...skills, skillInput.trim()]);
-      setSkillInput('');
+    const val = skillInput.trim();
+    if (!val) return;
+
+    const exists = skills.some((s) => s.toLowerCase() === val.toLowerCase());
+    if (!exists) {
+      setSkills([...skills, val]);
     }
+    setSkillInput('');
   };
 
   const removeSkill = (index: number) => {
@@ -692,10 +948,13 @@ export function CVGeneratorPage() {
 
   const deleteCertification = async (id: string) => {
     if (!id.includes('temp-')) {
-      try {
-        await cvService.deleteCertification(Number(id));
-      } catch (e) {
-        console.error('Failed to delete certification', e);
+      const num = safeNumId(id);
+      if (num !== null) {
+        try {
+          await cvService.deleteCertification(num);
+        } catch (e) {
+          console.error('Failed to delete certification', e);
+        }
       }
     }
     setCertifications(certifications.filter((cert) => cert.id !== id));
@@ -715,8 +974,49 @@ export function CVGeneratorPage() {
     setLanguages(languages.map((lang) => (lang.id === id ? { ...lang, [field]: value } : lang)));
   };
 
-  const deleteLanguage = (id: string) => {
+  const deleteLanguage = async (id: string) => {
+    if (!id.includes('temp-') && (cvService as any).deleteLanguage) {
+      const num = safeNumId(id);
+      if (num !== null) {
+        try {
+          await (cvService as any).deleteLanguage(num);
+        } catch (e) {
+          console.error('Failed to delete language', e);
+        }
+      }
+    }
     setLanguages(languages.filter((lang) => lang.id !== id));
+  };
+
+  // ✅ NEW: Leadership/Involvement functions
+  const addInvolvement = () => {
+    const newInv: Involvement = {
+      id: `temp-${Date.now()}`,
+      role: '',
+      organization: '',
+      year: '',
+      description: '',
+      order: involvements.length, // keep stable ordering
+    };
+    setInvolvements([...involvements, newInv]);
+  };
+
+  const updateInvolvement = (id: string, field: keyof Involvement, value: any) => {
+    setInvolvements(involvements.map((inv) => (inv.id === id ? { ...inv, [field]: value } : inv)));
+  };
+
+  const deleteInvolvement = async (id: string) => {
+    if (!id.includes('temp-') && (cvService as any).deleteInvolvement) {
+      const num = safeNumId(id);
+      if (num !== null) {
+        try {
+          await (cvService as any).deleteInvolvement(num);
+        } catch (e) {
+          console.error('Failed to delete involvement', e);
+        }
+      }
+    }
+    setInvolvements(involvements.filter((inv) => inv.id !== id));
   };
 
   // Award functions
@@ -735,7 +1035,17 @@ export function CVGeneratorPage() {
     setAwards(awards.map((award) => (award.id === id ? { ...award, [field]: value } : award)));
   };
 
-  const deleteAward = (id: string) => {
+  const deleteAward = async (id: string) => {
+    if (!id.includes('temp-') && (cvService as any).deleteAward) {
+      const num = safeNumId(id);
+      if (num !== null) {
+        try {
+          await (cvService as any).deleteAward(num);
+        } catch (e) {
+          console.error('Failed to delete award', e);
+        }
+      }
+    }
     setAwards(awards.filter((award) => award.id !== id));
   };
 
@@ -756,10 +1066,13 @@ export function CVGeneratorPage() {
 
   const deleteProject = async (id: string) => {
     if (!id.includes('temp-')) {
-      try {
-        await cvService.deleteProject(Number(id));
-      } catch (e) {
-        console.error('Failed to delete project', e);
+      const num = safeNumId(id);
+      if (num !== null) {
+        try {
+          await cvService.deleteProject(num);
+        } catch (e) {
+          console.error('Failed to delete project', e);
+        }
       }
     }
     setProjects(projects.filter((proj) => proj.id !== id));
@@ -784,10 +1097,13 @@ export function CVGeneratorPage() {
 
   const deleteReference = async (id: string) => {
     if (!id.includes('temp-')) {
-      try {
-        await cvService.deleteReference(Number(id));
-      } catch (e) {
-        console.error('Failed to delete reference', e);
+      const num = safeNumId(id);
+      if (num !== null) {
+        try {
+          await cvService.deleteReference(num);
+        } catch (e) {
+          console.error('Failed to delete reference', e);
+        }
       }
     }
     setReferences(references.filter((ref) => ref.id !== id));
@@ -866,11 +1182,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       Personal Details
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Enter your basic information
                     </p>
                   </div>
@@ -934,11 +1246,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       Contact Information
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       How can employers reach you?
                     </p>
                   </div>
@@ -1052,14 +1360,8 @@ export function CVGeneratorPage() {
               {currentStep === 'education' && (
                 <div className="space-y-6">
                   <div>
-                    <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                      Education
-                    </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Education</h2>
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Add your educational background
                     </p>
                   </div>
@@ -1161,9 +1463,7 @@ export function CVGeneratorPage() {
                               <Input
                                 type="month"
                                 value={edu.endDate}
-                                onChange={(e) =>
-                                  updateEducation(edu.id, 'endDate', e.target.value)
-                                }
+                                onChange={(e) => updateEducation(edu.id, 'endDate', e.target.value)}
                                 className={
                                   theme === 'light'
                                     ? 'bg-white border-gray-200'
@@ -1221,11 +1521,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       Work Experience
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Add your professional experience and internships
                     </p>
                   </div>
@@ -1284,9 +1580,7 @@ export function CVGeneratorPage() {
                               </Label>
                               <Input
                                 value={exp.company}
-                                onChange={(e) =>
-                                  updateExperience(exp.id, 'company', e.target.value)
-                                }
+                                onChange={(e) => updateExperience(exp.id, 'company', e.target.value)}
                                 placeholder="Company name"
                                 className={
                                   theme === 'light'
@@ -1307,9 +1601,7 @@ export function CVGeneratorPage() {
                             </Label>
                             <Input
                               value={exp.location}
-                              onChange={(e) =>
-                                updateExperience(exp.id, 'location', e.target.value)
-                              }
+                              onChange={(e) => updateExperience(exp.id, 'location', e.target.value)}
                               placeholder="City, Country"
                               className={
                                 theme === 'light'
@@ -1352,9 +1644,7 @@ export function CVGeneratorPage() {
                               <Input
                                 type="month"
                                 value={exp.endDate}
-                                onChange={(e) =>
-                                  updateExperience(exp.id, 'endDate', e.target.value)
-                                }
+                                onChange={(e) => updateExperience(exp.id, 'endDate', e.target.value)}
                                 className={
                                   theme === 'light'
                                     ? 'bg-white border-gray-200'
@@ -1409,14 +1699,8 @@ export function CVGeneratorPage() {
               {currentStep === 'skills' && (
                 <div className="space-y-6">
                   <div>
-                    <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                      Skills
-                    </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Skills</h2>
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Add your technical and soft skills. Press Enter to add each skill.
                     </p>
                   </div>
@@ -1455,7 +1739,7 @@ export function CVGeneratorPage() {
                         <div className="flex flex-wrap gap-2">
                           {skills.map((skill, index) => (
                             <Badge
-                              key={index}
+                              key={`${skill}-${index}`}
                               className={`px-4 py-2 rounded-full flex items-center gap-2 ${
                                 theme === 'light'
                                   ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
@@ -1500,11 +1784,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       Certifications
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Add professional certifications and training
                     </p>
                   </div>
@@ -1541,9 +1821,7 @@ export function CVGeneratorPage() {
                             </Label>
                             <Input
                               value={cert.name}
-                              onChange={(e) =>
-                                updateCertification(cert.id, 'name', e.target.value)
-                              }
+                              onChange={(e) => updateCertification(cert.id, 'name', e.target.value)}
                               placeholder="e.g., Adobe Certified Professional"
                               className={
                                 theme === 'light'
@@ -1564,9 +1842,7 @@ export function CVGeneratorPage() {
                               </Label>
                               <Input
                                 value={cert.issuer}
-                                onChange={(e) =>
-                                  updateCertification(cert.id, 'issuer', e.target.value)
-                                }
+                                onChange={(e) => updateCertification(cert.id, 'issuer', e.target.value)}
                                 placeholder="Organization name"
                                 className={
                                   theme === 'light'
@@ -1586,9 +1862,7 @@ export function CVGeneratorPage() {
                               <Input
                                 type="month"
                                 value={cert.date}
-                                onChange={(e) =>
-                                  updateCertification(cert.id, 'date', e.target.value)
-                                }
+                                onChange={(e) => updateCertification(cert.id, 'date', e.target.value)}
                                 className={
                                   theme === 'light'
                                     ? 'bg-white border-gray-200'
@@ -1621,14 +1895,8 @@ export function CVGeneratorPage() {
               {currentStep === 'languages' && (
                 <div className="space-y-6">
                   <div>
-                    <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                      Languages
-                    </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Languages</h2>
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Add languages you speak and your proficiency level
                     </p>
                   </div>
@@ -1666,9 +1934,7 @@ export function CVGeneratorPage() {
                               </Label>
                               <Input
                                 value={lang.language}
-                                onChange={(e) =>
-                                  updateLanguage(lang.id, 'language', e.target.value)
-                                }
+                                onChange={(e) => updateLanguage(lang.id, 'language', e.target.value)}
                                 placeholder="e.g., English"
                                 className={
                                   theme === 'light'
@@ -1687,9 +1953,7 @@ export function CVGeneratorPage() {
                               </Label>
                               <Select
                                 value={lang.proficiency}
-                                onValueChange={(value) =>
-                                  updateLanguage(lang.id, 'proficiency', value)
-                                }
+                                onValueChange={(value) => updateLanguage(lang.id, 'proficiency', value)}
                               >
                                 <SelectTrigger
                                   className={
@@ -1736,6 +2000,167 @@ export function CVGeneratorPage() {
                 </div>
               )}
 
+              {/* ✅ NEW: Leadership */}
+              {currentStep === 'leadership' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Leadership</h2>
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                      Add leadership roles, involvement, and organizations. These will appear in the Leadership section of your PDF.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    {involvements.map((inv) => (
+                      <div
+                        key={inv.id}
+                        className={`p-6 rounded-xl border-2 relative ${
+                          theme === 'light'
+                            ? 'border-gray-200 bg-white'
+                            : 'border-gray-700 bg-gray-800/30'
+                        }`}
+                      >
+                        <button
+                          onClick={() => deleteInvolvement(inv.id)}
+                          className={`absolute top-4 right-4 ${
+                            theme === 'light'
+                              ? 'text-gray-400 hover:text-red-500'
+                              : 'text-gray-400 hover:text-red-400'
+                          }`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+
+                        <div className="space-y-4 pr-8">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label
+                                className={`text-xs ${
+                                  theme === 'light' ? 'text-gray-700' : 'text-gray-300'
+                                }`}
+                              >
+                                Role
+                              </Label>
+                              <Input
+                                value={inv.role}
+                                onChange={(e) => updateInvolvement(inv.id, 'role', e.target.value)}
+                                placeholder="e.g., Treasurer"
+                                className={
+                                  theme === 'light'
+                                    ? 'bg-white border-gray-200'
+                                    : 'bg-gray-950 border-gray-700 text-white'
+                                }
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label
+                                className={`text-xs ${
+                                  theme === 'light' ? 'text-gray-700' : 'text-gray-300'
+                                }`}
+                              >
+                                Organization
+                              </Label>
+                              <Input
+                                value={inv.organization}
+                                onChange={(e) =>
+                                  updateInvolvement(inv.id, 'organization', e.target.value)
+                                }
+                                placeholder="e.g., Malay Student Association"
+                                className={
+                                  theme === 'light'
+                                    ? 'bg-white border-gray-200'
+                                    : 'bg-gray-950 border-gray-700 text-white'
+                                }
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label
+                                className={`text-xs ${
+                                  theme === 'light' ? 'text-gray-700' : 'text-gray-300'
+                                }`}
+                              >
+                                Year
+                              </Label>
+                              <Input
+                                value={inv.year}
+                                onChange={(e) => updateInvolvement(inv.id, 'year', e.target.value)}
+                                placeholder="e.g., 2022-2024"
+                                className={
+                                  theme === 'light'
+                                    ? 'bg-white border-gray-200'
+                                    : 'bg-gray-950 border-gray-700 text-white'
+                                }
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label
+                                className={`text-xs ${
+                                  theme === 'light' ? 'text-gray-700' : 'text-gray-300'
+                                }`}
+                              >
+                                Display Order (Optional)
+                              </Label>
+                              <Input
+                                type="number"
+                                value={String(inv.order ?? 0)}
+                                onChange={(e) =>
+                                  updateInvolvement(inv.id, 'order', Number(e.target.value || 0))
+                                }
+                                className={
+                                  theme === 'light'
+                                    ? 'bg-white border-gray-200'
+                                    : 'bg-gray-950 border-gray-700 text-white'
+                                }
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label
+                              className={`text-xs ${
+                                theme === 'light' ? 'text-gray-700' : 'text-gray-300'
+                              }`}
+                            >
+                              Description (Optional)
+                            </Label>
+                            <Textarea
+                              value={inv.description}
+                              onChange={(e) =>
+                                updateInvolvement(inv.id, 'description', e.target.value)
+                              }
+                              placeholder="Brief description of your responsibilities..."
+                              className={`min-h-[80px] ${
+                                theme === 'light'
+                                  ? 'bg-white border-gray-200'
+                                  : 'bg-gray-950 border-gray-700 text-white'
+                              }`}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    <Button
+                      onClick={addInvolvement}
+                      variant="outline"
+                      className={`w-full border-dashed border-2 ${
+                        theme === 'light'
+                          ? 'border-gray-300 hover:border-blue-500 hover:bg-blue-50'
+                          : 'border-gray-700 hover:border-blue-500 hover:bg-blue-500/10'
+                      }`}
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Leadership
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {/* Awards */}
               {currentStep === 'awards' && (
                 <div className="space-y-6">
@@ -1743,11 +2168,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       Awards & Honors
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Add any awards, honors, or recognitions you've received
                     </p>
                   </div>
@@ -1784,9 +2205,7 @@ export function CVGeneratorPage() {
                             </Label>
                             <Input
                               value={award.title}
-                              onChange={(e) =>
-                                updateAward(award.id, 'title', e.target.value)
-                              }
+                              onChange={(e) => updateAward(award.id, 'title', e.target.value)}
                               placeholder="e.g., Best Student Film Award"
                               className={
                                 theme === 'light'
@@ -1807,9 +2226,7 @@ export function CVGeneratorPage() {
                               </Label>
                               <Input
                                 value={award.issuer}
-                                onChange={(e) =>
-                                  updateAward(award.id, 'issuer', e.target.value)
-                                }
+                                onChange={(e) => updateAward(award.id, 'issuer', e.target.value)}
                                 placeholder="Organization name"
                                 className={
                                   theme === 'light'
@@ -1829,9 +2246,7 @@ export function CVGeneratorPage() {
                               <Input
                                 type="month"
                                 value={award.date}
-                                onChange={(e) =>
-                                  updateAward(award.id, 'date', e.target.value)
-                                }
+                                onChange={(e) => updateAward(award.id, 'date', e.target.value)}
                                 className={
                                   theme === 'light'
                                     ? 'bg-white border-gray-200'
@@ -1851,9 +2266,7 @@ export function CVGeneratorPage() {
                             </Label>
                             <Textarea
                               value={award.description}
-                              onChange={(e) =>
-                                updateAward(award.id, 'description', e.target.value)
-                              }
+                              onChange={(e) => updateAward(award.id, 'description', e.target.value)}
                               placeholder="Brief description of the award..."
                               className={`min-h-[60px] ${
                                 theme === 'light'
@@ -1889,11 +2302,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       Projects (Optional)
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Showcase your significant projects
                     </p>
                   </div>
@@ -1930,9 +2339,7 @@ export function CVGeneratorPage() {
                             </Label>
                             <Input
                               value={project.name}
-                              onChange={(e) =>
-                                updateProject(project.id, 'name', e.target.value)
-                              }
+                              onChange={(e) => updateProject(project.id, 'name', e.target.value)}
                               placeholder="e.g., Documentary Film Production"
                               className={
                                 theme === 'light'
@@ -1952,9 +2359,7 @@ export function CVGeneratorPage() {
                             </Label>
                             <Textarea
                               value={project.description}
-                              onChange={(e) =>
-                                updateProject(project.id, 'description', e.target.value)
-                              }
+                              onChange={(e) => updateProject(project.id, 'description', e.target.value)}
                               placeholder="Describe the project and your role..."
                               className={`min-h-[80px] ${
                                 theme === 'light'
@@ -1974,9 +2379,7 @@ export function CVGeneratorPage() {
                             </Label>
                             <Input
                               value={project.technologies}
-                              onChange={(e) =>
-                                updateProject(project.id, 'technologies', e.target.value)
-                              }
+                              onChange={(e) => updateProject(project.id, 'technologies', e.target.value)}
                               placeholder="e.g., Adobe Premiere Pro, DaVinci Resolve"
                               className={
                                 theme === 'light'
@@ -2012,11 +2415,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       References (Optional)
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Add professional references who can speak about your work
                     </p>
                   </div>
@@ -2054,15 +2453,13 @@ export function CVGeneratorPage() {
                               </Label>
                               <Input
                                 value={reference.name}
-                                onChange={(e) =>
-                                  updateReference(reference.id, 'name', e.target.value)
-                                }
+                                onChange={(e) => updateReference(reference.id, 'name', e.target.value)}
                                 placeholder="e.g., Dr. Ahmad Hassan"
                                 className={
                                   theme === 'light'
                                     ? 'bg-white border-gray-200'
                                     : 'bg-gray-950 border-gray-700 text-white'
-                              }
+                                }
                               />
                             </div>
 
@@ -2084,7 +2481,7 @@ export function CVGeneratorPage() {
                                   theme === 'light'
                                     ? 'bg-white border-gray-200'
                                     : 'bg-gray-950 border-gray-700 text-white'
-                              }
+                                }
                               />
                             </div>
                           </div>
@@ -2122,9 +2519,7 @@ export function CVGeneratorPage() {
                               </Label>
                               <Input
                                 value={reference.phone}
-                                onChange={(e) =>
-                                  updateReference(reference.id, 'phone', e.target.value)
-                                }
+                                onChange={(e) => updateReference(reference.id, 'phone', e.target.value)}
                                 placeholder="e.g., +60 12-987 6543"
                                 className={
                                   theme === 'light'
@@ -2144,9 +2539,7 @@ export function CVGeneratorPage() {
                               </Label>
                               <Input
                                 value={reference.email}
-                                onChange={(e) =>
-                                  updateReference(reference.id, 'email', e.target.value)
-                                }
+                                onChange={(e) => updateReference(reference.id, 'email', e.target.value)}
                                 placeholder="e.g., ahmad@aiu.edu.my"
                                 className={
                                   theme === 'light'
@@ -2183,11 +2576,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       Upload Profile Photo
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Add a professional photo for your CV (optional)
                     </p>
                   </div>
@@ -2212,22 +2601,16 @@ export function CVGeneratorPage() {
                           <div className="flex gap-2 justify-center">
                             <Button
                               variant="outline"
-                              className={
-                                theme === 'light' ? 'border-gray-300' : 'border-gray-700'
-                              }
-                              onClick={() =>
-                                document.getElementById('cv-photo-upload')?.click()
-                              }
+                              className={theme === 'light' ? 'border-gray-300' : 'border-gray-700'}
+                              onClick={() => document.getElementById('cv-photo-upload')?.click()}
                             >
                               <Upload className="h-4 w-4 mr-2" />
                               Change Photo
                             </Button>
                             <Button
                               variant="outline"
-                              className={
-                                theme === 'light' ? 'border-gray-300' : 'border-gray-700'
-                              }
-                              onClick={() => setProfilePhoto('')}
+                              className={theme === 'light' ? 'border-gray-300' : 'border-gray-700'}
+                              onClick={handleRemovePhoto}
                             >
                               Remove Photo
                             </Button>
@@ -2240,11 +2623,7 @@ export function CVGeneratorPage() {
                               theme === 'light' ? 'text-gray-400' : 'text-gray-500'
                             }`}
                           />
-                          <h3
-                            className={
-                              theme === 'light' ? 'text-gray-900 mb-2' : 'text-white mb-2'
-                            }
-                          >
+                          <h3 className={theme === 'light' ? 'text-gray-900 mb-2' : 'text-white mb-2'}>
                             Upload Profile Photo
                           </h3>
                           <p
@@ -2254,18 +2633,12 @@ export function CVGeneratorPage() {
                           >
                             Click to upload or drag and drop your photo here
                           </p>
-                          <p
-                            className={`text-xs ${
-                              theme === 'light' ? 'text-gray-400' : 'text-gray-500'
-                            }`}
-                          >
+                          <p className={`text-xs ${theme === 'light' ? 'text-gray-400' : 'text-gray-500'}`}>
                             JPG, PNG or JPEG, maximum file size 2MB
                           </p>
                           <Button
                             className="mt-6 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
-                            onClick={() =>
-                              document.getElementById('cv-photo-upload')?.click()
-                            }
+                            onClick={() => document.getElementById('cv-photo-upload')?.click()}
                           >
                             <Upload className="h-4 w-4 mr-2" />
                             Choose File
@@ -2291,11 +2664,7 @@ export function CVGeneratorPage() {
                     <h2 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       Your CV is Ready!
                     </h2>
-                    <p
-                      className={`text-sm ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Preview your CV or download it as a PDF
                     </p>
                   </div>
@@ -2312,18 +2681,10 @@ export function CVGeneratorPage() {
                         theme === 'light' ? 'text-blue-600' : 'text-teal-400'
                       }`}
                     />
-                    <h3
-                      className={`text-center mb-4 ${
-                        theme === 'light' ? 'text-gray-900' : 'text-white'
-                      }`}
-                    >
+                    <h3 className={`text-center mb-4 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
                       CV Generated Successfully
                     </h3>
-                    <p
-                      className={`text-center mb-6 ${
-                        theme === 'light' ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className={`text-center mb-6 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                       Your professional CV is ready to download or preview
                     </p>
                     <div className="flex flex-col gap-3 max-w-md mx-auto">
@@ -2334,24 +2695,20 @@ export function CVGeneratorPage() {
                         <FileText className="h-4 w-4 mr-2" />
                         Preview CV
                       </Button>
+
                       <Button
                         variant="outline"
-                        onClick={() =>
-                          alert('PDF download functionality would be implemented here')
-                        }
-                        className={
-                          theme === 'light' ? 'border-gray-300' : 'border-gray-700'
-                        }
+                        onClick={handleDownloadPdf}
+                        className={theme === 'light' ? 'border-gray-300' : 'border-gray-700'}
                       >
                         <Download className="h-4 w-4 mr-2" />
                         Download PDF
                       </Button>
+
                       <Button
                         variant="outline"
                         onClick={() => setCurrentStep('personal')}
-                        className={
-                          theme === 'light' ? 'border-gray-300' : 'border-gray-700'
-                        }
+                        className={theme === 'light' ? 'border-gray-300' : 'border-gray-700'}
                       >
                         <FileText className="h-4 w-4 mr-2" />
                         Edit Information
@@ -2366,18 +2723,10 @@ export function CVGeneratorPage() {
                         : 'bg-blue-500/10 border border-blue-500/30'
                     }`}
                   >
-                    <h4
-                      className={`mb-2 ${
-                        theme === 'light' ? 'text-blue-900' : 'text-blue-400'
-                      }`}
-                    >
+                    <h4 className={`mb-2 ${theme === 'light' ? 'text-blue-900' : 'text-blue-400'}`}>
                       CV Summary
                     </h4>
-                    <ul
-                      className={`space-y-2 text-sm ${
-                        theme === 'light' ? 'text-blue-800' : 'text-blue-300'
-                      }`}
-                    >
+                    <ul className={`space-y-2 text-sm ${theme === 'light' ? 'text-blue-800' : 'text-blue-300'}`}>
                       <li>• Name: {fullName || 'Not provided'}</li>
                       <li>• Email: {email || 'Not provided'}</li>
                       <li>• Education entries: {education.length}</li>
@@ -2385,6 +2734,7 @@ export function CVGeneratorPage() {
                       <li>• Skills: {skills.length}</li>
                       <li>• Certifications: {certifications.length}</li>
                       <li>• Languages: {languages.length}</li>
+                      <li>• Leadership entries: {involvements.length}</li>
                       <li>• Awards: {awards.length}</li>
                       <li>• Projects: {projects.length}</li>
                     </ul>
@@ -2435,7 +2785,7 @@ export function CVGeneratorPage() {
                   onClick={async () => {
                     const currentIndex = steps.findIndex((s) => s.id === currentStep);
                     if (currentIndex < steps.length - 1) {
-                      await handleSave(); // backend save but UI unchanged
+                      await handleSave({ silent: true });
                       setCurrentStep(steps[currentIndex + 1].id);
                     }
                   }}

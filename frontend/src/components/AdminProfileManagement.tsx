@@ -5,7 +5,7 @@ import { Badge } from './ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { useTheme } from './ThemeProvider';
-import { 
+import {
   User,
   Mail,
   Phone,
@@ -16,6 +16,8 @@ import {
   BookOpen,
   Package2
 } from 'lucide-react';
+
+import adminProfileManagementService from '../services/adminProfileManagement';
 
 interface Student {
   id: string;
@@ -44,92 +46,60 @@ interface Admin {
   profilePicture?: string;
 }
 
-export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNavigate?: (page: string, params?: any) => void; initialStudentId?: string }) {
+type BackendList<T> = T[] | { results: T[] };
+
+type BackendUser = {
+  email?: string;
+  phone?: string | null;
+  profile_picture?: string | null;
+};
+
+type BackendStudentProfile = {
+  id?: number | string;
+  full_name?: string | null;
+  student_id?: string | null;
+  program?: string | null;
+  year?: string | null;
+  status?: string | null;
+  total_bookings?: number | null;
+  active_rentals?: number | null;
+  tutorials_watched?: number | null;
+  user?: BackendUser | null;
+
+  hasCV?: boolean;
+  has_cv?: boolean;
+};
+
+type BackendAdminProfile = {
+  id?: number | string;
+  full_name?: string | null;
+  admin_id?: string | null;
+  role?: string | null;
+  position?: string | null;
+  status?: string | null;
+  user?: BackendUser | null;
+};
+
+function extractList<T>(data: BackendList<T>): T[] {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray((data as any).results)) return (data as any).results;
+  return [];
+}
+
+export function AdminProfileManagement({
+  onNavigate,
+  initialStudentId
+}: {
+  onNavigate?: (page: string, params?: any) => void;
+  initialStudentId?: string;
+}) {
   const { theme } = useTheme();
   const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
   const [selectedProfile, setSelectedProfile] = useState<Student | Admin | null>(null);
   const [profileType, setProfileType] = useState<'student' | 'admin'>('student');
 
-  // Mock data
-  const [students] = useState<Student[]>([
-    {
-      id: '1',
-      name: 'Sarah Johnson',
-      email: 'sarah@aiu.edu.my',
-      studentId: 'S001',
-      phone: '+60 13-456 7890',
-      program: 'Bachelor of Media & Communication',
-      year: '3rd Year',
-      status: 'active',
-      totalBookings: 15,
-      activeRentals: 2,
-      tutorialsWatched: 32,
-      hasCV: true
-    },
-    {
-      id: '2',
-      name: 'Michael Chen',
-      email: 'michael@aiu.edu.my',
-      studentId: 'S002',
-      phone: '+60 14-567 8901',
-      program: 'Bachelor of Media & Communication',
-      year: '2nd Year',
-      status: 'active',
-      totalBookings: 8,
-      activeRentals: 1,
-      tutorialsWatched: 18,
-      hasCV: true
-    },
-    {
-      id: '3',
-      name: 'Emily Rodriguez',
-      email: 'emily@aiu.edu.my',
-      studentId: 'S003',
-      phone: '+60 12-345 6789',
-      program: 'Bachelor of Media & Communication',
-      year: '1st Year',
-      status: 'active',
-      totalBookings: 5,
-      activeRentals: 0,
-      tutorialsWatched: 12,
-      hasCV: true
-    },
-    {
-      id: '4',
-      name: 'David Lee',
-      email: 'david@aiu.edu.my',
-      studentId: 'S004',
-      phone: '+60 15-678 9012',
-      program: 'Bachelor of Media & Communication',
-      year: '1st Year',
-      status: 'active',
-      totalBookings: 3,
-      activeRentals: 0,
-      tutorialsWatched: 8,
-      hasCV: false
-    }
-  ]);
-
-  const [admins] = useState<Admin[]>([
-    {
-      id: '1',
-      name: 'Dr. Ahmad Hassan',
-      email: 'ahmad@aiu.edu.my',
-      adminId: 'A001',
-      phone: '+60 12-987 6543',
-      role: 'System Administrator',
-      status: 'active'
-    },
-    {
-      id: '2',
-      name: 'Lisa Wong',
-      email: 'lisa@aiu.edu.my',
-      adminId: 'A002',
-      phone: '+60 13-876 5432',
-      role: 'Content Manager',
-      status: 'active'
-    }
-  ]);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [admins, setAdmins] = useState<Admin[]>([]);
 
   const handleViewProfile = (profile: Student | Admin, type: 'student' | 'admin') => {
     setSelectedProfile(profile);
@@ -161,21 +131,132 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
     }
   };
 
-  // Auto-open student profile if initialStudentId is provided
+  useEffect(() => {
+    let isMounted = true;
+
+    const load = async () => {
+      try {
+        const [studentsRes, adminsRes] = await Promise.all([
+          adminProfileManagementService.getStudentProfiles(),
+          adminProfileManagementService.getAdminProfiles()
+        ]);
+
+        const studentRawList = extractList<BackendStudentProfile>(studentsRes.data as BackendList<BackendStudentProfile>);
+        const adminRawList = extractList<BackendAdminProfile>(adminsRes.data as BackendList<BackendAdminProfile>);
+
+        // ✅ FIX: Do NOT drop profiles just because phone/program/year is empty.
+        // Only "student_id" and "user.email" and "full_name" are essential for list rendering.
+        const mappedStudents: Student[] = studentRawList
+          .map((p) => {
+            if (!p) return null;
+
+            const user = p.user || undefined;
+
+            const studentId = p.student_id ? String(p.student_id) : '';
+            const email = user?.email ? String(user.email) : '';
+            const name = p.full_name ? String(p.full_name) : '';
+
+            if (!studentId || !email || !name) {
+              console.warn('Skipping student profile due to missing required fields (full_name/student_id/user.email):', p);
+              return null;
+            }
+
+            const status = String(p.status || '').toLowerCase();
+            const normalizedStatus: 'active' | 'inactive' = status === 'inactive' ? 'inactive' : 'active';
+
+            const hasCvValue =
+              typeof p.hasCV === 'boolean'
+                ? p.hasCV
+                : typeof p.has_cv === 'boolean'
+                  ? p.has_cv
+                  : false;
+
+            return {
+              id: String(p.id ?? studentId),
+              name,
+              email,
+              phone: user?.phone ? String(user.phone) : '',
+              studentId,
+              program: p.program ? String(p.program) : '',
+              year: p.year ? String(p.year) : '',
+              status: normalizedStatus,
+              profilePicture: user?.profile_picture || undefined,
+              totalBookings: Number(p.total_bookings ?? 0),
+              activeRentals: Number(p.active_rentals ?? 0),
+              tutorialsWatched: Number(p.tutorials_watched ?? 0),
+              hasCV: hasCvValue
+            };
+          })
+          .filter(Boolean) as Student[];
+
+        const mappedAdmins: Admin[] = adminRawList
+          .map((p) => {
+            if (!p) return null;
+
+            const user = p.user || undefined;
+
+            const adminId = p.admin_id ? String(p.admin_id) : '';
+            const email = user?.email ? String(user.email) : '';
+            const name = p.full_name ? String(p.full_name) : '';
+
+            if (!adminId || !email || !name) {
+              console.warn('Skipping admin profile due to missing required fields (full_name/admin_id/user.email):', p);
+              return null;
+            }
+
+            const roleValue =
+              typeof p.role === 'string'
+                ? p.role
+                : typeof p.position === 'string'
+                  ? p.position
+                  : '';
+
+            const status = String(p.status || '').toLowerCase();
+            const normalizedStatus: 'active' | 'inactive' = status === 'inactive' ? 'inactive' : 'active';
+
+            return {
+              id: String(p.id ?? adminId),
+              name,
+              email,
+              phone: user?.phone ? String(user.phone) : '',
+              adminId,
+              role: roleValue || '',
+              status: normalizedStatus,
+              profilePicture: user?.profile_picture || undefined
+            };
+          })
+          .filter(Boolean) as Admin[];
+
+        if (!isMounted) return;
+        setStudents(mappedStudents);
+        setAdmins(mappedAdmins);
+      } catch (err) {
+        console.error('Failed to load profiles:', err);
+        if (!isMounted) return;
+        setStudents([]);
+        setAdmins([]);
+      }
+    };
+
+    load();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (initialStudentId) {
-      const student = students.find(s => s.studentId === initialStudentId);
+      const student = students.find((s) => s.studentId === initialStudentId);
       if (student) {
         handleViewProfile(student, 'student');
       }
     }
-  }, [initialStudentId]);
+  }, [initialStudentId, students]);
 
-  // Detail View
   if (viewMode === 'detail' && selectedProfile) {
     return (
       <div className="p-6 space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Button
@@ -193,30 +274,28 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
               </p>
             </div>
           </div>
-          <Badge className={getStatusColor(selectedProfile.status)}>
-            {selectedProfile.status}
-          </Badge>
+          <Badge className={getStatusColor(selectedProfile.status)}>{selectedProfile.status}</Badge>
         </div>
 
-        {/* Profile Card */}
         <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
           <CardContent className="p-8 space-y-8">
-            {/* Profile Header */}
             <div className="flex items-center gap-6">
-              <div className={`flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br ${
-                profileType === 'student' ? 'from-teal-500 to-cyan-500' : 'from-purple-500 to-pink-500'
-              } text-white text-3xl`}>
-                {selectedProfile.name.split(' ').map(n => n[0]).join('')}
+              <div
+                className={`flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br ${
+                  profileType === 'student' ? 'from-teal-500 to-cyan-500' : 'from-purple-500 to-pink-500'
+                } text-white text-3xl`}
+              >
+                {selectedProfile.name
+                  .split(' ')
+                  .map((n) => n[0])
+                  .join('')}
               </div>
               <div>
                 <h2 className={`text-2xl mb-1 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
                   {selectedProfile.name}
                 </h2>
                 <p className={`text-lg ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                  {profileType === 'student' 
-                    ? (selectedProfile as Student).studentId
-                    : (selectedProfile as Admin).adminId
-                  }
+                  {profileType === 'student' ? (selectedProfile as Student).studentId : (selectedProfile as Admin).adminId}
                 </p>
                 {profileType === 'student' && (
                   <p className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
@@ -226,7 +305,6 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
               </div>
             </div>
 
-            {/* Contact Information */}
             <div>
               <h3 className={`text-lg mb-4 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
                 Contact Information
@@ -250,7 +328,6 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
               </div>
             </div>
 
-            {/* Academic Information (Students only) */}
             {profileType === 'student' && (
               <div>
                 <h3 className={`text-lg mb-4 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
@@ -262,9 +339,7 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
                       <GraduationCap className={`h-4 w-4 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`} />
                       <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>Program</p>
                     </div>
-                    <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                      {(selectedProfile as Student).program}
-                    </p>
+                    <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{(selectedProfile as Student).program}</p>
                   </div>
 
                   <div>
@@ -272,35 +347,27 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
                       <Calendar className={`h-4 w-4 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`} />
                       <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>Current Year</p>
                     </div>
-                    <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                      {(selectedProfile as Student).year}
-                    </p>
+                    <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{(selectedProfile as Student).year}</p>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Role Information (Admins only) */}
             {profileType === 'admin' && (
               <div>
-                <h3 className={`text-lg mb-4 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-                  Role Information
-                </h3>
+                <h3 className={`text-lg mb-4 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>Role Information</h3>
                 <div>
                   <div className="flex items-center gap-2 mb-2">
                     <User className={`h-4 w-4 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`} />
                     <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>Role</p>
                   </div>
-                  <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                    {(selectedProfile as Admin).role}
-                  </p>
+                  <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{(selectedProfile as Admin).role}</p>
                 </div>
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Activity Statistics (Students only) */}
         {profileType === 'student' && (
           <div className="grid grid-cols-3 gap-6">
             <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
@@ -310,9 +377,7 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
                     <Calendar className="h-6 w-6 text-white" />
                   </div>
                   <div>
-                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                      Total Bookings
-                    </p>
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>Total Bookings</p>
                     <p className={`text-2xl ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
                       {(selectedProfile as Student).totalBookings}
                     </p>
@@ -328,9 +393,7 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
                     <Package2 className="h-6 w-6 text-white" />
                   </div>
                   <div>
-                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                      Active Rentals
-                    </p>
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>Active Rentals</p>
                     <p className={`text-2xl ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
                       {(selectedProfile as Student).activeRentals}
                     </p>
@@ -346,9 +409,7 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
                     <BookOpen className="h-6 w-6 text-white" />
                   </div>
                   <div>
-                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                      Tutorials Watched
-                    </p>
+                    <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>Tutorials Watched</p>
                     <p className={`text-2xl ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
                       {(selectedProfile as Student).tutorialsWatched}
                     </p>
@@ -359,13 +420,10 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
           </div>
         )}
 
-        {/* CV Section (Students with CV only) */}
         {profileType === 'student' && (selectedProfile as Student).hasCV && (
           <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
             <CardHeader>
-              <CardTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                Digital Portfolio (CV)
-              </CardTitle>
+              <CardTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Digital Portfolio (CV)</CardTitle>
               <CardDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
                 This student has an active CV/Portfolio
               </CardDescription>
@@ -385,18 +443,13 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
     );
   }
 
-  // List View
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
       <div>
         <h1 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Profile Management</h1>
-        <p className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
-          Manage student and admin accounts
-        </p>
+        <p className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>Manage student and admin accounts</p>
       </div>
 
-      {/* Tabs */}
       <Tabs defaultValue="students" className="w-full">
         <TabsList className={theme === 'light' ? 'bg-gray-100' : 'bg-gray-800'}>
           <TabsTrigger value="students" className={theme === 'light' ? 'data-[state=active]:bg-white' : 'data-[state=active]:bg-gray-900'}>
@@ -407,7 +460,6 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
           </TabsTrigger>
         </TabsList>
 
-        {/* Students Tab */}
         <TabsContent value="students" className="space-y-6">
           <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
             <CardHeader>
@@ -434,27 +486,23 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-teal-500 to-cyan-500 text-white">
-                            {student.name.split(' ').map(n => n[0]).join('')}
+                            {student.name
+                              .split(' ')
+                              .map((n) => n[0])
+                              .join('')}
                           </div>
+
+                          {/* ✅ FIX: show ONLY full name (do NOT show year under the name) */}
                           <div>
                             <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{student.name}</p>
-                            <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>{student.year}</p>
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                        {student.studentId}
-                      </TableCell>
-                      <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
-                        {student.email}
-                      </TableCell>
-                      <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
-                        {student.program}
-                      </TableCell>
+                      <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{student.studentId}</TableCell>
+                      <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>{student.email}</TableCell>
+                      <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>{student.program}</TableCell>
                       <TableCell>
-                        <Badge className={getStatusColor(student.status)}>
-                          {student.status}
-                        </Badge>
+                        <Badge className={getStatusColor(student.status)}>{student.status}</Badge>
                       </TableCell>
                       <TableCell>
                         <Button
@@ -474,7 +522,6 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
           </Card>
         </TabsContent>
 
-        {/* Admins Tab */}
         <TabsContent value="admins" className="space-y-6">
           <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
             <CardHeader>
@@ -501,24 +548,19 @@ export function AdminProfileManagement({ onNavigate, initialStudentId }: { onNav
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white">
-                            {admin.name.split(' ').map(n => n[0]).join('')}
+                            {admin.name
+                              .split(' ')
+                              .map((n) => n[0])
+                              .join('')}
                           </div>
                           <p className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{admin.name}</p>
                         </div>
                       </TableCell>
-                      <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                        {admin.adminId}
-                      </TableCell>
-                      <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
-                        {admin.email}
-                      </TableCell>
-                      <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
-                        {admin.role}
-                      </TableCell>
+                      <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{admin.adminId}</TableCell>
+                      <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>{admin.email}</TableCell>
+                      <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>{admin.role}</TableCell>
                       <TableCell>
-                        <Badge className={getStatusColor(admin.status)}>
-                          {admin.status}
-                        </Badge>
+                        <Badge className={getStatusColor(admin.status)}>{admin.status}</Badge>
                       </TableCell>
                       <TableCell>
                         <Button
