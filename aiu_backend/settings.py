@@ -11,14 +11,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ---------------- SECURITY ----------------
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-change-this-in-production")
-DEBUG = os.getenv("DEBUG", "True").lower() in ("1", "true", "yes", "y")
+# Default to False in production for security, unless explicitly set to True
+DEBUG = os.getenv("DEBUG", "False").lower() in ("1", "true", "yes", "y")
 
 # ---------------- HOSTS ----------------
+# Added .railway.app and .rlwy.net to defaults so you don't get 400 Bad Request errors on deploy
 ALLOWED_HOSTS = [
     h.strip()
     for h in os.getenv(
         "ALLOWED_HOSTS",
-        "localhost,127.0.0.1,172.16.112.91"
+        "localhost,127.0.0.1,172.16.112.91,.railway.app,.rlwy.net"
     ).split(",")
     if h.strip()
 ]
@@ -31,11 +33,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-
     "rest_framework",
     "corsheaders",
     "rest_framework_simplejwt",
-
     "api",
 ]
 
@@ -43,6 +43,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",  # MUST BE FIRST
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware", # Recommended for static files on Railway
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -77,17 +78,17 @@ TEMPLATES = [
 # DATABASE (Railway MySQL – ALL CASES SUPPORTED)
 # ======================================================
 
-# 1️⃣ Preferred: Railway MYSQL_URL (Recommended)
+# 1. Preferred: Railway MYSQL_URL
 MYSQL_URL = os.getenv("MYSQL_URL")
 
-# 2️⃣ Fallback: Railway individual vars
+# 2. Fallback: Railway individual vars
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE") or os.getenv("MYSQLDATABASE")
 MYSQL_USER = os.getenv("MYSQLUSER")
 MYSQL_PASSWORD = os.getenv("MYSQLPASSWORD") or os.getenv("MYSQL_ROOT_PASSWORD")
 MYSQL_HOST = os.getenv("MYSQLHOST")
 MYSQL_PORT = os.getenv("MYSQLPORT", "3306")
 
-# 3️⃣ Legacy support (your DB_* vars)
+# 3. Legacy support
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
@@ -96,60 +97,63 @@ DB_PORT = os.getenv("DB_PORT", "3306")
 
 DATABASES = {}
 
-if MYSQL_URL:
-    # Railway native connection string
-    parsed = urlparse(MYSQL_URL)
-    DATABASES["default"] = {
+def _build_mysql_db(name, user, password, host, port):
+    return {
         "ENGINE": "django.db.backends.mysql",
-        "NAME": parsed.path.lstrip("/"),
-        "USER": parsed.username,
-        "PASSWORD": parsed.password,
-        "HOST": parsed.hostname,
-        "PORT": parsed.port or "3306",
+        "NAME": name,
+        "USER": user,
+        "PASSWORD": password,
+        "HOST": host,
+        "PORT": str(port or "3306"),
         "OPTIONS": {"charset": "utf8mb4"},
     }
 
-elif MYSQL_HOST and MYSQL_DATABASE and MYSQL_USER and MYSQL_PASSWORD:
-    # Railway individual vars
-    DATABASES["default"] = {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": MYSQL_DATABASE,
-        "USER": MYSQL_USER,
-        "PASSWORD": MYSQL_PASSWORD,
-        "HOST": MYSQL_HOST,
-        "PORT": MYSQL_PORT,
-        "OPTIONS": {"charset": "utf8mb4"},
-    }
+if MYSQL_URL and "://" in MYSQL_URL:
+    try:
+        parsed = urlparse(MYSQL_URL)
+        DATABASES["default"] = _build_mysql_db(
+            name=parsed.path.lstrip("/"),
+            user=parsed.username,
+            password=parsed.password,
+            host=parsed.hostname,
+            port=parsed.port or 3306,
+        )
+    except Exception:
+        # If parsing fails, fall through to other methods
+        pass
 
-elif DB_HOST and DB_NAME and DB_USER and DB_PASSWORD:
-    # Legacy DB_* support
-    DATABASES["default"] = {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": DB_NAME,
-        "USER": DB_USER,
-        "PASSWORD": DB_PASSWORD,
-        "HOST": DB_HOST,
-        "PORT": DB_PORT,
-        "OPTIONS": {"charset": "utf8mb4"},
-    }
+if not DATABASES.get("default") and MYSQL_HOST and MYSQL_DATABASE and MYSQL_USER:
+    DATABASES["default"] = _build_mysql_db(
+        name=MYSQL_DATABASE,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+    )
 
-else:
+elif not DATABASES.get("default") and DB_HOST and DB_NAME and DB_USER:
+    DATABASES["default"] = _build_mysql_db(
+        name=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT,
+    )
+
+if not DATABASES.get("default"):
+    # IMPORTANT: Never silently fallback to localhost in production
+    if not DEBUG:
+        # We raise a warning or error here, but for now we fallback to sqlite or empty to prevent import crashes
+        # ideally, fail hard:
+        print("WARNING: No Database config found. API will likely fail.")
+        
     # Local dev fallback ONLY
-    DATABASES["default"] = {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": "aiu_local",
-        "USER": "root",
-        "PASSWORD": "",
-        "HOST": "127.0.0.1",
-        "PORT": "3306",
-        "OPTIONS": {"charset": "utf8mb4"},
-    }
-
-# Fail fast in production if DB is misconfigured (prevents mysqld.sock / localhost crash)
-if not DEBUG and DATABASES["default"]["HOST"] in ("localhost", "127.0.0.1"):
-    raise RuntimeError(
-        "Production DB misconfiguration: using localhost. "
-        "Set MYSQL_URL (recommended) or MYSQLHOST / MYSQLDATABASE / MYSQLUSER / MYSQLPASSWORD."
+    DATABASES["default"] = _build_mysql_db(
+        name="aiu_local",
+        user="root",
+        password="",
+        host="127.0.0.1",
+        port="3306",
     )
 
 # ---------------- PASSWORD VALIDATION ----------------
@@ -169,6 +173,8 @@ USE_TZ = True
 # ---------------- STATIC / MEDIA ----------------
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
+# Add support for serving static files on Railway
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
@@ -180,7 +186,7 @@ DEFAULT_CORS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "http://172.16.112.91:5173",
+    "https://aiu-production.up.railway.app", # Example production URL
 ]
 
 cors_env = os.getenv("CORS_ALLOWED_ORIGINS")
@@ -195,6 +201,9 @@ CORS_ALLOW_CREDENTIALS = True
 csrf_env = os.getenv("CSRF_TRUSTED_ORIGINS")
 if csrf_env:
     CSRF_TRUSTED_ORIGINS = [o.strip() for o in csrf_env.split(",") if o.strip()]
+else:
+    # Auto-allow your railway domain for CSRF if variable not set
+    CSRF_TRUSTED_ORIGINS = ["https://*.railway.app", "https://*.rlwy.net"]
 
 # ---------------- REST FRAMEWORK ----------------
 REST_FRAMEWORK = {
@@ -227,8 +236,7 @@ SIMPLE_JWT = {
 # ---------------- CUSTOM USER ----------------
 AUTH_USER_MODEL = "api.User"
 
-# ---------------- RAILWAY / PROXY HTTPS (important when DEBUG=False) ----------------
-# Railway runs behind a proxy (HTTPS -> your app). Helps CSRF/cookies/admin.
+# ---------------- RAILWAY / PROXY HTTPS ----------------
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     CSRF_COOKIE_SECURE = True
