@@ -2,6 +2,7 @@ django==4.2.7
 djangorestframework==3.14.0
 django-cors-headers==4.3.1
 djangorestframework-simplejwt==5.3.1
+
 Pillow==10.1.0
 python-dotenv==1.0.0
 mysqlclient==2.2.0
@@ -9,10 +10,6 @@ qrcode==7.4.2
 PyPDF2==3.0.1
 reportlab==4.0.7
 python-dateutil==2.8.2
-# Additional libraries used in code
 requests>=2.31.0
-psycopg2-binary>=2.9.9 # If you use PostgreSQL
-pytest>=7.4.0 # For testing
-python-multipart>=0.0.6 # For file uploads (if needed)
-drf-yasg>=1.21.7 # For API docs (if used)
-django-filter>=23.5 # For filtering in DRF (if used)
+
+gunicorn>=20.1.0
