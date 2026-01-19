@@ -2,6 +2,7 @@ from datetime import datetime
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.db import transaction
 from .models import *
 
 User = get_user_model()
@@ -229,18 +230,12 @@ class LabBookingSerializer(serializers.ModelSerializer):
         return start_time, end_time
 
     def validate(self, attrs):
-        """
-        ✅ IMPORTANT:
-        - On CREATE: require lab_room/date/time_slot and compute start/end
-        - On PATCH (partial update): do NOT require time_slot unless the client sends it
-        """
         request = self.context.get('request')
         user = request.user if request and hasattr(request, 'user') else None
         initial = getattr(self, 'initial_data', {}) or {}
 
         creating = self.instance is None
 
-        # Track whether date/time_slot are being set in this request
         date_touched = creating or ('booking_date' in attrs) or ('date' in attrs) or ('date' in initial)
         time_slot_touched = creating or ('time_slot' in attrs) or ('time_slot' in initial)
 
@@ -296,13 +291,9 @@ class LabBookingSerializer(serializers.ModelSerializer):
                 attrs['start_time'] = start_time
                 attrs['end_time'] = end_time
 
-        # ✅ NEW: Prevent booking past time slots
-        # - block booking_date in the past
-        # - if booking_date is today, block time_slot that already started/passed
+        # ✅ Prevent booking past time slots
         if creating or date_touched or time_slot_touched:
             booking_date = attrs.get('booking_date') or (getattr(self.instance, 'booking_date', None) if self.instance else None)
-
-            # Determine start_time for comparison (from attrs if parsed, else from instance)
             st = attrs.get('start_time') or (getattr(self.instance, 'start_time', None) if self.instance else None)
 
             if booking_date:
@@ -322,10 +313,8 @@ class LabBookingSerializer(serializers.ModelSerializer):
                         except serializers.ValidationError:
                             raise
                         except Exception:
-                            # if anything fails, be safe and block rather than allowing past booking
                             raise serializers.ValidationError({"time_slot": "Cannot book a past time slot."})
 
-        # bind student on create
         if creating and not attrs.get('student') and user:
             attrs['student'] = user
 
@@ -345,11 +334,154 @@ class LabBookingSerializer(serializers.ModelSerializer):
 
 # ---------------- EQUIPMENT ---------------- #
 
+class EquipmentCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EquipmentCategory
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at']
+
+
 class EquipmentSerializer(serializers.ModelSerializer):
+    # ✅ read-only categories objects
+    categories = EquipmentCategorySerializer(many=True, read_only=True)
+
+    # ✅ write-only list of category IDs (M2M) - require at least one on create
+    category_ids = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=EquipmentCategory.objects.all(),
+        write_only=True,
+        required=False
+    )
+
+    # ✅ legacy model field (CharField choices) - make optional in API
+    category = serializers.CharField(required=False, allow_blank=True)
+
+    # ✅ computed fields (read-only)
+    rented_units = serializers.SerializerMethodField()
+    rentable_quantity = serializers.SerializerMethodField()
+    computed_available = serializers.SerializerMethodField()
+
     class Meta:
         model = Equipment
         fields = '__all__'
-        read_only_fields = ['qr_code', 'created_at', 'updated_at']
+        read_only_fields = [
+            'qr_code',
+            'created_at',
+            'updated_at',
+            'quantity_available',
+            'rented_units',
+            'rentable_quantity',
+            'computed_available',
+        ]
+
+    def _derive_legacy_category(self, category_objs):
+        """
+        Convert selected EquipmentCategory names -> Equipment.category choices,
+        so old required field won't block create.
+        """
+        names = [str(getattr(c, "name", "") or "").lower() for c in (category_objs or [])]
+
+        for n in names:
+            if 'camera' in n:
+                return 'camera'
+            if 'audio' in n or 'mic' in n:
+                return 'audio'
+            if 'light' in n:
+                return 'lighting'
+            if 'access' in n:
+                return 'accessories'
+        return 'other'
+
+    def get_rented_units(self, obj):
+        try:
+            return int(obj.rented_units())
+        except Exception:
+            return 0
+
+    def get_computed_available(self, obj):
+        try:
+            return int(obj.computed_available)
+        except Exception:
+            return 0
+
+    def get_rentable_quantity(self, obj):
+        try:
+            return int(obj.rentable_quantity)
+        except Exception:
+            return 0
+
+    def validate(self, attrs):
+        instance = getattr(self, 'instance', None)
+
+        # keep existing values when partial update
+        total = attrs.get('quantity_total', instance.quantity_total if instance else 0)
+        maint = attrs.get('quantity_under_maintenance', instance.quantity_under_maintenance if instance else 0)
+
+        try:
+            total = int(total)
+            maint = int(maint)
+        except Exception:
+            raise serializers.ValidationError("Quantity fields must be integers.")
+
+        if total < 0:
+            raise serializers.ValidationError({"quantity_total": "Cannot be negative."})
+        if maint < 0:
+            raise serializers.ValidationError({"quantity_under_maintenance": "Cannot be negative."})
+
+        rented = instance.rented_units() if instance else 0
+        available_now = max(total - int(rented), 0)
+
+        if total < int(rented):
+            raise serializers.ValidationError({
+                "quantity_total": f"Total cannot be less than currently rented units ({rented})."
+            })
+
+        if maint > available_now:
+            raise serializers.ValidationError({
+                "quantity_under_maintenance": (
+                    f"Under maintenance cannot exceed available (not rented) units ({available_now})."
+                )
+            })
+
+        # ✅ require at least one category on create (or if no existing categories)
+        incoming_cat_ids = attrs.get('category_ids', None)
+        if instance is None:
+            if incoming_cat_ids is None or len(incoming_cat_ids) == 0:
+                raise serializers.ValidationError({"category_ids": "Select at least one category."})
+
+        return attrs
+
+    def create(self, validated_data):
+        category_ids = validated_data.pop('category_ids', [])
+        validated_data.pop('quantity_available', None)  # ignore read-only
+
+        # ✅ auto-fill old required field if missing
+        if not validated_data.get('category'):
+            validated_data['category'] = self._derive_legacy_category(category_ids)
+
+        obj = super().create(validated_data)
+
+        if category_ids is not None:
+            obj.categories.set(category_ids)
+
+        obj.save()  # triggers model auto-sync logic
+        return obj
+
+    def update(self, instance, validated_data):
+        category_ids = validated_data.pop('category_ids', None)
+        validated_data.pop('quantity_available', None)  # ignore read-only
+
+        # ✅ if categories were sent and legacy category not sent, derive it
+        if category_ids is not None and not validated_data.get('category'):
+            validated_data['category'] = self._derive_legacy_category(category_ids)
+
+        obj = super().update(instance, validated_data)
+
+        if category_ids is not None:
+            obj.categories.set(category_ids)
+
+        obj.save()
+        return obj
 
 
 class EquipmentRentalSerializer(serializers.ModelSerializer):
@@ -382,6 +514,115 @@ class EquipmentRentalSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'user') and request.user and request.user.is_authenticated:
             validated_data['student'] = request.user
         return super().create(validated_data)
+
+
+class EquipmentRequestItemSerializer(serializers.ModelSerializer):
+    equipment = serializers.PrimaryKeyRelatedField(queryset=Equipment.objects.all(), required=False)
+    equipment_name = serializers.CharField(source='equipment.name', read_only=True)
+    equipment_code = serializers.CharField(source='equipment.equipment_id', read_only=True)
+
+    student_name = serializers.CharField(source='request.student.get_full_name', read_only=True)
+    student_id = serializers.CharField(source='request.student.student_profile.student_id', read_only=True)
+
+    reviewed_by_name = serializers.CharField(source='reviewed_by.get_full_name', read_only=True)
+
+    rental_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EquipmentRequestItem
+        fields = '__all__'
+        read_only_fields = [
+            'request',
+            'status',
+            'reviewed_by',
+            'reviewed_at',
+            'reject_reason',
+            'rental',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_rental_id(self, obj):
+        try:
+            return obj.rental.id if obj.rental else None
+        except Exception:
+            return None
+
+
+class EquipmentRequestCreateItemSerializer(serializers.Serializer):
+    equipment_id = serializers.PrimaryKeyRelatedField(queryset=Equipment.objects.all())
+    quantity = serializers.IntegerField(min_value=1)
+    duration_days = serializers.IntegerField(min_value=1)
+    notes = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+
+class EquipmentRequestSerializer(serializers.ModelSerializer):
+    items = EquipmentRequestItemSerializer(many=True, read_only=True)
+    cart_items = EquipmentRequestCreateItemSerializer(many=True, write_only=True)
+
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_id = serializers.CharField(source='student.student_profile.student_id', read_only=True)
+
+    class Meta:
+        model = EquipmentRequest
+        fields = '__all__'
+        read_only_fields = ['student', 'status', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        cart_items = attrs.get('cart_items', [])
+        if not cart_items:
+            raise serializers.ValidationError({"cart_items": "Cart is empty."})
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user if request and hasattr(request, 'user') else None
+
+        cart_items = validated_data.pop('cart_items', [])
+        notes = validated_data.get('notes', None)
+
+        merged = {}
+        for row in cart_items:
+            eq = row['equipment_id']
+            key = str(eq.pk)
+
+            if key not in merged:
+                merged[key] = {
+                    'equipment': eq,
+                    'quantity': int(row.get('quantity', 1)),
+                    'duration_days': int(row.get('duration_days', 1)),
+                    'notes': row.get('notes', None),
+                }
+            else:
+                merged[key]['quantity'] += int(row.get('quantity', 1))
+                merged[key]['duration_days'] = max(
+                    merged[key]['duration_days'],
+                    int(row.get('duration_days', 1))
+                )
+
+        with transaction.atomic():
+            req_obj = EquipmentRequest.objects.create(
+                student=user,
+                status='pending',
+                notes=notes
+            )
+
+            items = []
+            for v in merged.values():
+                items.append(
+                    EquipmentRequestItem(
+                        request=req_obj,
+                        equipment=v['equipment'],
+                        quantity=v['quantity'],
+                        duration_days=v['duration_days'],
+                        notes=v.get('notes', None),
+                        status='pending'
+                    )
+                )
+
+            EquipmentRequestItem.objects.bulk_create(items)
+
+        return req_obj
 
 
 # ---------------- CV (unchanged) ---------------- #

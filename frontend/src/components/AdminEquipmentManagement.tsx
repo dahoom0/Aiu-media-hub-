@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -9,21 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { useTheme } from './ThemeProvider';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import {
-  Plus,
-  Edit,
-  Trash2,
-  Package,
-  Camera,
-  Mic,
-  Lightbulb,
-  Upload,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  Download,
-} from 'lucide-react';
+import { Plus, Edit, Trash2, Upload, CheckCircle2, XCircle, Clock, Download } from 'lucide-react';
 import { toast } from 'sonner';
+
+// ✅ Use your existing axios client (same one used everywhere with JWT)
+import api from '../services/apiClient';
 
 const API_ORIGIN = 'http://localhost:8000';
 
@@ -51,22 +41,6 @@ const buildMediaUrl = (val: any) => {
   return `${API_ORIGIN}${url}`;
 };
 
-// ✅ IMPORTANT: this matches your real file name in /services
-import equipmentService from '../services/equipmentAdmin.js';
-
-// ✅ Use your existing axios client (same one used everywhere with JWT)
-import api from '../services/apiClient';
-
-interface Equipment {
-  id: string;
-  name: string;
-  equipmentId: string;
-  category: string;
-  status: 'available' | 'rented' | 'maintenance';
-  imageUrl: string;
-  description: string;
-}
-
 type StatusString =
   | 'pending'
   | 'approved'
@@ -85,7 +59,7 @@ type EquipmentRentalRow = {
   end_date?: string;
   duration?: string;
 
-  equipment?: number;
+  equipment?: number | { id?: number; name?: string; equipment_id?: string };
   equipment_name?: string;
   equipment_id?: string;
 
@@ -96,7 +70,6 @@ type EquipmentRentalRow = {
   reviewed_by_name?: string;
   reviewed_at?: string;
 
-  // backend may return these, not required for UI
   notes?: string;
   reject_reason?: string;
 
@@ -104,6 +77,34 @@ type EquipmentRentalRow = {
   updated_at?: string;
 };
 
+type EquipmentCategoryRow = {
+  id: number;
+  name: string;
+  created_at?: string;
+};
+
+interface EquipmentUI {
+  id: string; // keep string (Select uses string keys often)
+  name: string;
+  equipmentId: string;
+
+  categories: string[];
+  category_ids: number[];
+
+  // ✅ BACKEND TRUTH FIELDS
+  quantity_total: number;
+  quantity_available: number;
+  quantity_under_maintenance: number;
+
+  // legacy / compatibility
+  quantity: number;
+
+  status: 'available' | 'rented' | 'maintenance';
+  imageUrl: string;
+  description: string;
+}
+
+// -------- helpers --------
 function normalizeList(data: any): any[] {
   if (!data) return [];
   if (Array.isArray(data)) return data;
@@ -115,6 +116,19 @@ function safeStatus(x: any) {
   return String(x || '').toLowerCase();
 }
 
+function normalizeEquipmentStatus(x: any): EquipmentUI['status'] {
+  const s = safeStatus(x);
+  if (s === 'available') return 'available';
+  if (s === 'rented') return 'rented';
+  if (s === 'maintenance') return 'maintenance';
+
+  if (s.includes('avail')) return 'available';
+  if (s.includes('rent')) return 'rented';
+  if (s.includes('maint')) return 'maintenance';
+
+  return 'available';
+}
+
 function safeTime(t?: string) {
   if (!t) return '—';
   const d = new Date(t);
@@ -124,9 +138,6 @@ function safeTime(t?: string) {
 
 function filenameFromContentDisposition(cd?: string) {
   if (!cd) return '';
-  // examples:
-  // attachment; filename="file.csv"
-  // attachment; filename=file.csv
   const m = /filename\*?=(?:UTF-8'')?("?)([^";]+)\1/i.exec(cd);
   if (!m) return '';
   try {
@@ -147,44 +158,129 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+// -------- API endpoints (must match your DRF router) --------
+const EQUIPMENT_BASE = '/equipment/';
+const RENTALS_BASE = '/equipment-rentals/';
+const CATEGORIES_BASE = '/equipment-categories/';
+
 export function AdminEquipmentManagement({
   onNavigate,
 }: {
   onNavigate?: (page: string, params?: any) => void;
 }) {
   const { theme } = useTheme();
+
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null);
+  const [selectedEquipment, setSelectedEquipment] = useState<EquipmentUI | null>(null);
 
-  // ✅ Reject dialog state (NEW)
+  // ✅ Reject dialog state
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
   const [rejectTargetId, setRejectTargetId] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState('');
 
-  // ✅ Export states (NEW)
+  // ✅ Export states
   const [exportInventoryLoading, setExportInventoryLoading] = useState(false);
   const [exportRentalsLoading, setExportRentalsLoading] = useState<Record<string, boolean>>({});
 
-  // Form state
+  // Form state (UI)
   const [equipmentName, setEquipmentName] = useState('');
   const [equipmentId, setEquipmentId] = useState('');
-  const [equipmentCategory, setEquipmentCategory] = useState('');
+  const [equipmentCategoryIds, setEquipmentCategoryIds] = useState<number[]>([]);
+
+  // ✅ inventory fields (backend-aligned)
+  const [equipmentTotal, setEquipmentTotal] = useState<number>(1);
+  const [equipmentAvailable, setEquipmentAvailable] = useState<number>(1);
+  const [equipmentMaintenance, setEquipmentMaintenance] = useState<number>(0);
+
   const [equipmentDescription, setEquipmentDescription] = useState('');
-  const [equipmentStatus, setEquipmentStatus] = useState<'available' | 'rented' | 'maintenance'>('available');
+  const [equipmentStatus, setEquipmentStatus] = useState<EquipmentUI['status']>('available');
   const [equipmentImage, setEquipmentImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState('');
 
   // Backend data
-  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [equipment, setEquipment] = useState<EquipmentUI[]>([]);
+  const [categories, setCategories] = useState<EquipmentCategoryRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // ✅ Rentals data
+  // Rentals
   const [rentals, setRentals] = useState<EquipmentRentalRow[]>([]);
   const [rentalsLoading, setRentalsLoading] = useState(false);
   const [rentalActionLoading, setRentalActionLoading] = useState<Record<number, 'approve' | 'reject' | null>>({});
 
-  const categories = ['Camera', 'Audio', 'Lighting', 'Accessories', 'Grip'];
+  const categoryIdToName = useMemo(() => {
+    const m = new Map<number, string>();
+    categories.forEach((c) => m.set(c.id, c.name));
+    return m;
+  }, [categories]);
+
+  // ✅ Dialog sizing (fit screen without changing UI look)
+  const dialogFitClass = `w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto`;
+
+  // -------- mapping between backend and UI --------
+  const mapEquipmentFromAPI = (item: any): EquipmentUI => {
+    const rawId = item?.id;
+    const id = rawId != null ? String(rawId) : (crypto?.randomUUID?.() ?? String(Date.now()));
+
+    const equipment_id = item?.equipment_id ?? item?.equipmentId ?? '';
+    const name = item?.name ?? '';
+
+    const status = normalizeEquipmentStatus(item?.status);
+
+    // ✅ STRICT: READ EXACT BACKEND FIELDS (no mixing)
+    const quantity_total = Number.isFinite(Number(item?.quantity_total)) ? Number(item.quantity_total) : 0;
+    const quantity_available = Number.isFinite(Number(item?.quantity_available)) ? Number(item.quantity_available) : 0;
+    const quantity_under_maintenance = Number.isFinite(Number(item?.quantity_under_maintenance))
+      ? Number(item.quantity_under_maintenance)
+      : 0;
+
+    // categories can be M2M (categories[]) or FK (category)
+    const catObjs: any[] = Array.isArray(item?.categories)
+      ? item.categories
+      : (item?.category && typeof item.category === 'object' ? [item.category] : []);
+
+    const catNames = catObjs
+      .map((c: any) => (typeof c?.name === 'string' ? c.name : null))
+      .filter(Boolean) as string[];
+
+    const catIdsFromObjs = catObjs
+      .map((c: any) => (typeof c?.id === 'number' ? c.id : null))
+      .filter((x: any) => typeof x === 'number') as number[];
+
+    const catIdsFromField =
+      Array.isArray(item?.category_ids)
+        ? item.category_ids.filter((x: any) => typeof x === 'number')
+        : [];
+
+    const catIdsFromFK =
+      typeof item?.category_id === 'number'
+        ? [item.category_id]
+        : (typeof item?.category === 'number' ? [item.category] : []);
+
+    const catIds = (catIdsFromField.length ? catIdsFromField : (catIdsFromObjs.length ? catIdsFromObjs : catIdsFromFK));
+
+    const imageUrl = buildMediaUrl(item?.image);
+    const description = item?.description ?? '';
+
+    return {
+      id,
+      name,
+      equipmentId: String(equipment_id || ''),
+      categories: catNames,
+      category_ids: catIds,
+
+      quantity_total,
+      quantity_available,
+      quantity_under_maintenance,
+
+      // legacy convenience
+      quantity: quantity_total,
+
+      status,
+      imageUrl,
+      description,
+    };
+  };
 
   const stats = useMemo(() => {
     return {
@@ -201,20 +297,33 @@ export function AdminEquipmentManagement({
     return { pending, active, returned };
   }, [rentals]);
 
+  // -------- fetchers --------
+  const fetchCategories = async () => {
+    try {
+      const res = await api.get(CATEGORIES_BASE);
+      const rows = normalizeList(res.data) as EquipmentCategoryRow[];
+      setCategories(rows);
+    } catch (err: any) {
+      console.error(err);
+      setCategories([]);
+      toast.error('Failed to load equipment categories (check /api/equipment-categories/)');
+    }
+  };
+
   const fetchEquipment = async () => {
     setIsLoading(true);
     try {
-      const items = await equipmentService.list();
-      setEquipment(items as Equipment[]);
+      const res = await api.get(EQUIPMENT_BASE);
+      const rows = normalizeList(res.data);
+      setEquipment(rows.map(mapEquipmentFromAPI));
     } catch (err: any) {
+      console.error(err);
       toast.error('Failed to load equipment');
+      setEquipment([]);
     } finally {
       setIsLoading(false);
     }
   };
-
-  const RENTALS_BASE = '/equipment-rentals/';
-  const EQUIPMENT_BASE = '/equipment/';
 
   const fetchRentals = async () => {
     setRentalsLoading(true);
@@ -231,7 +340,7 @@ export function AdminEquipmentManagement({
   };
 
   const refreshAll = async () => {
-    await Promise.all([fetchEquipment(), fetchRentals()]);
+    await Promise.all([fetchCategories(), fetchEquipment(), fetchRentals()]);
   };
 
   useEffect(() => {
@@ -239,7 +348,21 @@ export function AdminEquipmentManagement({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ✅ keep values consistent without changing UI
+  useEffect(() => {
+    // available cannot exceed total
+    if (equipmentAvailable > equipmentTotal) {
+      setEquipmentAvailable(equipmentTotal);
+    }
+    // maintenance cannot exceed available
+    if (equipmentMaintenance > equipmentAvailable) {
+      setEquipmentMaintenance(equipmentAvailable);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [equipmentTotal, equipmentAvailable, equipmentMaintenance]);
+
+  // -------- form helpers --------
+  const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setEquipmentImage(file);
@@ -252,90 +375,192 @@ export function AdminEquipmentManagement({
   const resetForm = () => {
     setEquipmentName('');
     setEquipmentId('');
-    setEquipmentCategory('');
+    setEquipmentCategoryIds([]);
+
+    setEquipmentTotal(1);
+    setEquipmentAvailable(1);
+    setEquipmentMaintenance(0);
+
     setEquipmentDescription('');
     setEquipmentStatus('available');
     setEquipmentImage(null);
     setImagePreview('');
   };
 
-  const handleAddEquipment = async () => {
-    if (!equipmentName || !equipmentId || !equipmentCategory) {
-      toast.error('Please fill in all required fields');
-      return;
+  const validateInventory = () => {
+    if (equipmentTotal < 0 || equipmentAvailable < 0 || equipmentMaintenance < 0) {
+      toast.error('Inventory values cannot be negative');
+      return false;
+    }
+    if (equipmentAvailable > equipmentTotal) {
+      toast.error('Available cannot be greater than Total');
+      return false;
+    }
+    if (equipmentMaintenance > equipmentAvailable) {
+      toast.error('Maintenance cannot be greater than Available');
+      return false;
+    }
+    return true;
+  };
+
+  // -------- create/update helpers (match serializer: category_ids, and model fields) --------
+  // ✅ IMPORTANT: DO NOT send quantity_available (backend serializer marks it read-only)
+  const buildEquipmentFormData = (payload: {
+    name: string;
+    equipment_id: string;
+    quantity_total: number;
+    quantity_under_maintenance: number;
+    status: string;
+    description: string;
+    category_ids: number[];
+    imageFile?: File | null;
+  }) => {
+    const fd = new FormData();
+    fd.append('name', payload.name);
+    fd.append('equipment_id', payload.equipment_id);
+
+    fd.append('quantity_total', String(payload.quantity_total));
+    fd.append('quantity_under_maintenance', String(payload.quantity_under_maintenance));
+
+    fd.append('status', payload.status);
+    fd.append('description', payload.description || '');
+
+    // DRF safest: repeated keys for list fields
+    payload.category_ids.forEach((id) => fd.append('category_ids', String(id)));
+
+    if (payload.imageFile) {
+      fd.append('image', payload.imageFile);
     }
 
+    return fd;
+  };
+
+  const handleAddEquipment = async () => {
+    if (!equipmentName || !equipmentId || equipmentCategoryIds.length === 0) {
+      toast.error('Please fill in all required fields (including at least one category)');
+      return;
+    }
+    if (!validateInventory()) return;
+
     try {
-      const created = await equipmentService.create({
+      const fd = buildEquipmentFormData({
         name: equipmentName,
-        equipmentId,
-        category: equipmentCategory,
+        equipment_id: equipmentId,
+        quantity_total: equipmentTotal,
+        quantity_under_maintenance: equipmentMaintenance,
         status: equipmentStatus,
         description: equipmentDescription,
+        category_ids: equipmentCategoryIds,
         imageFile: equipmentImage,
       });
 
-      setEquipment(prev => [created as Equipment, ...prev]);
+      const res = await api.post(EQUIPMENT_BASE, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const created = mapEquipmentFromAPI(res.data);
+      setEquipment(prev => [created, ...prev]);
       toast.success('Equipment added successfully!');
       resetForm();
       setIsAddDialogOpen(false);
     } catch (err: any) {
-      toast.error('Failed to add equipment');
+      console.error(err);
+
+      // show DRF validation details if present
+      const data = err?.response?.data;
+      const detail =
+        typeof data === 'string'
+          ? data
+          : data?.detail
+            ? String(data.detail)
+            : data && typeof data === 'object'
+              ? Object.entries(data).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v)}`).join(' | ')
+              : null;
+
+      toast.error(detail || 'Failed to add equipment');
     }
   };
 
   const handleEditEquipment = async () => {
     if (!selectedEquipment) return;
 
-    if (!equipmentName || !equipmentId || !equipmentCategory) {
-      toast.error('Please fill in all required fields');
+    if (!equipmentName || !equipmentId || equipmentCategoryIds.length === 0) {
+      toast.error('Please fill in all required fields (including at least one category)');
       return;
     }
+    if (!validateInventory()) return;
 
     try {
-      const updated = await equipmentService.update(selectedEquipment.id, {
+      const fd = buildEquipmentFormData({
         name: equipmentName,
-        equipmentId,
-        category: equipmentCategory,
+        equipment_id: equipmentId,
+        quantity_total: equipmentTotal,
+        quantity_under_maintenance: equipmentMaintenance,
         status: equipmentStatus,
         description: equipmentDescription,
+        category_ids: equipmentCategoryIds,
         imageFile: equipmentImage,
       });
 
-      setEquipment(prev =>
-        prev.map(item => (item.id === selectedEquipment.id ? (updated as Equipment) : item))
-      );
+      const res = await api.patch(`${EQUIPMENT_BASE}${selectedEquipment.id}/`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const updated = mapEquipmentFromAPI(res.data);
+      setEquipment(prev => prev.map(item => (item.id === selectedEquipment.id ? updated : item)));
 
       toast.success('Equipment updated successfully!');
       resetForm();
       setIsEditDialogOpen(false);
       setSelectedEquipment(null);
     } catch (err: any) {
-      toast.error('Failed to update equipment');
+      console.error(err);
+
+      const data = err?.response?.data;
+      const detail =
+        typeof data === 'string'
+          ? data
+          : data?.detail
+            ? String(data.detail)
+            : data && typeof data === 'object'
+              ? Object.entries(data).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v)}`).join(' | ')
+              : null;
+
+      toast.error(detail || 'Failed to update equipment');
     }
   };
 
-  const openEditDialog = (item: Equipment) => {
+  const openEditDialog = (item: EquipmentUI) => {
     setSelectedEquipment(item);
+
     setEquipmentName(item.name);
     setEquipmentId(item.equipmentId);
-    setEquipmentCategory(item.category);
+    setEquipmentCategoryIds(item.category_ids || []);
+
+    // ✅ Prefill from backend truth
+    setEquipmentTotal(Number(item.quantity_total ?? 0));
+    setEquipmentAvailable(Number(item.quantity_available ?? 0));
+    setEquipmentMaintenance(Number(item.quantity_under_maintenance ?? 0));
+
     setEquipmentDescription(item.description);
     setEquipmentStatus(item.status);
+
     setEquipmentImage(null);
-    setImagePreview(item.imageUrl);
+    setImagePreview(item.imageUrl || '');
     setIsEditDialogOpen(true);
   };
 
-  const handleStatusChange = async (id: string, newStatus: 'available' | 'rented' | 'maintenance') => {
+  const handleStatusChange = async (id: string, newStatus: EquipmentUI['status']) => {
     const prev = equipment;
     setEquipment(curr => curr.map(item => (item.id === id ? { ...item, status: newStatus } : item)));
 
     try {
-      const updated = await equipmentService.updateStatus(id, newStatus);
-      setEquipment(curr => curr.map(item => (item.id === id ? (updated as Equipment) : item)));
+      const res = await api.patch(`${EQUIPMENT_BASE}${id}/`, { status: newStatus });
+      const updated = mapEquipmentFromAPI(res.data);
+      setEquipment(curr => curr.map(item => (item.id === id ? updated : item)));
       toast.success('Equipment status updated!');
     } catch (err: any) {
+      console.error(err);
       setEquipment(prev);
       toast.error('Failed to update status');
     }
@@ -346,20 +571,23 @@ export function AdminEquipmentManagement({
     setEquipment(curr => curr.filter(e => e.id !== id));
 
     try {
-      await equipmentService.remove(id);
+      await api.delete(`${EQUIPMENT_BASE}${id}/`);
       toast.success('Equipment deleted successfully!');
     } catch (err: any) {
+      console.error(err);
       setEquipment(prev);
       toast.error('Failed to delete equipment');
     }
   };
 
+  // -------- rentals actions (require backend actions in viewset) --------
   const approveRental = async (id: number) => {
     setRentalActionLoading(prev => ({ ...prev, [id]: 'approve' }));
     try {
       await api.post(`${RENTALS_BASE}${id}/approve/`);
       toast.success('Rental approved!');
       await fetchRentals();
+      await fetchEquipment();
     } catch (err: any) {
       console.error(err);
       toast.error(err?.response?.data?.detail || 'Failed to approve rental');
@@ -368,13 +596,10 @@ export function AdminEquipmentManagement({
     }
   };
 
-  // ✅ UPDATED: reject now sends reject_reason
   const rejectRental = async (id: number, reason: string) => {
     setRentalActionLoading(prev => ({ ...prev, [id]: 'reject' }));
     try {
-      await api.post(`${RENTALS_BASE}${id}/reject/`, {
-        reject_reason: reason,
-      });
+      await api.post(`${RENTALS_BASE}${id}/reject/`, { reject_reason: reason });
       toast.success('Rental rejected!');
       await fetchRentals();
     } catch (err: any) {
@@ -408,7 +633,7 @@ export function AdminEquipmentManagement({
     setRejectReason('');
   };
 
-  // ✅ NEW: Export inventory (ALL equipment recorded in system)
+  // -------- exports (require backend endpoints) --------
   const exportInventoryCsv = async () => {
     setExportInventoryLoading(true);
     try {
@@ -419,13 +644,12 @@ export function AdminEquipmentManagement({
       toast.success('Inventory exported!');
     } catch (err: any) {
       console.error(err);
-      toast.error('Failed to export inventory');
+      toast.error('Failed to export inventory (check backend export endpoint)');
     } finally {
       setExportInventoryLoading(false);
     }
   };
 
-  // ✅ NEW: Export rentals for ONE equipment_id
   const exportRentalsCsv = async (equipmentIdValue: string) => {
     if (!equipmentIdValue) {
       toast.error('Missing equipment ID');
@@ -441,12 +665,13 @@ export function AdminEquipmentManagement({
       toast.success('Rentals exported!');
     } catch (err: any) {
       console.error(err);
-      toast.error('Failed to export rentals');
+      toast.error('Failed to export rentals (check backend export endpoint)');
     } finally {
       setExportRentalsLoading(prev => ({ ...prev, [equipmentIdValue]: false }));
     }
   };
 
+  // -------- UI helpers --------
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'available':
@@ -469,17 +694,9 @@ export function AdminEquipmentManagement({
     return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
   };
 
-  const getCategoryIcon = (category: string) => {
-    switch (category.toLowerCase()) {
-      case 'camera':
-        return <Camera className="h-4 w-4" />;
-      case 'audio':
-        return <Mic className="h-4 w-4" />;
-      case 'lighting':
-        return <Lightbulb className="h-4 w-4" />;
-      default:
-        return <Package className="h-4 w-4" />;
-    }
+  const handleOpenStudentProfile = (studentId?: string) => {
+    if (!studentId) return;
+    onNavigate?.('admin-profiles', { studentId });
   };
 
   const pendingRentals = useMemo(() => rentals.filter(r => safeStatus(r.status) === 'pending'), [rentals]);
@@ -492,16 +709,27 @@ export function AdminEquipmentManagement({
     [rentals]
   );
 
-  const handleOpenStudentProfile = (studentId?: string) => {
-    if (!studentId) return;
-    onNavigate?.('admin-profiles', { studentId });
+  const toggleCategoryId = (id: number) => {
+    setEquipmentCategoryIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   };
+
+  const displayCategoryNames = (item: EquipmentUI) => {
+    if (item.categories?.length) return item.categories;
+    if (item.category_ids?.length) {
+      return item.category_ids
+        .map((id) => categoryIdToName.get(id))
+        .filter(Boolean) as string[];
+    }
+    return [];
+  };
+
+  const rentableNow = useMemo(() => Math.max(0, equipmentAvailable - equipmentMaintenance), [equipmentAvailable, equipmentMaintenance]);
 
   return (
     <div className="p-6 space-y-6">
-      {/* ✅ Reject Reason Dialog (NEW) */}
+      {/* Reject Reason Dialog */}
       <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
-        <DialogContent className={`max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+        <DialogContent className={`${dialogFitClass} max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
           <DialogHeader>
             <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Reject Request</DialogTitle>
             <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
@@ -515,12 +743,11 @@ export function AdminEquipmentManagement({
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
               rows={4}
-              placeholder="e.g., Equipment is not available for these dates / Missing student ID / Not eligible..."
-              className={`${
-                theme === 'light'
-                  ? 'bg-gray-50 border-gray-200 text-gray-900'
-                  : 'bg-gray-800 border-gray-700 text-white'
-              }`}
+              placeholder="e.g. Equipment not available / Missing student ID / Not eligible..."
+              className={`${theme === 'light'
+                ? 'bg-gray-50 border-gray-200 text-gray-900'
+                : 'bg-gray-800 border-gray-700 text-white'
+                }`}
             />
           </div>
 
@@ -553,7 +780,6 @@ export function AdminEquipmentManagement({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* ✅ NEW BUTTON: Export Inventory */}
           <Button
             variant="outline"
             onClick={exportInventoryCsv}
@@ -584,7 +810,7 @@ export function AdminEquipmentManagement({
               </Button>
             </DialogTrigger>
 
-            <DialogContent className={`max-w-2xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+            <DialogContent className={`${dialogFitClass} ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
               <DialogHeader>
                 <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Add New Equipment</DialogTitle>
                 <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
@@ -602,9 +828,8 @@ export function AdminEquipmentManagement({
                       </div>
                     ) : (
                       <div
-                        className={`w-32 h-32 rounded-lg border-2 border-dashed flex items-center justify-center ${
-                          theme === 'light' ? 'border-gray-300' : 'border-gray-700'
-                        }`}
+                        className={`w-32 h-32 rounded-lg border-2 border-dashed flex items-center justify-center ${theme === 'light' ? 'border-gray-300' : 'border-gray-700'
+                          }`}
                       >
                         <Upload className={`h-8 w-8 ${theme === 'light' ? 'text-gray-400' : 'text-gray-500'}`} />
                       </div>
@@ -645,33 +870,89 @@ export function AdminEquipmentManagement({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Category *</Label>
-                    <Select value={equipmentCategory} onValueChange={setEquipmentCategory}>
-                      <SelectTrigger className={`mt-2 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}>
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-800 border-gray-700'}>
-                        {categories.map((cat) => (
-                          <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                {/* ✅ Inventory fields */}
+                <div>
+                  <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Inventory *</Label>
+                  <div className="grid grid-cols-3 gap-4 mt-2">
+                    <div>
+                      <Label className={theme === 'light' ? 'text-gray-700' : 'text-gray-300'}>Total</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={equipmentTotal}
+                        onChange={(e) => setEquipmentTotal(Math.max(0, parseInt(e.target.value) || 0))}
+                        className={`${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}
+                      />
+                    </div>
+                    <div>
+                      <Label className={theme === 'light' ? 'text-gray-700' : 'text-gray-300'}>Available</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={equipmentAvailable}
+                        onChange={(e) => setEquipmentAvailable(Math.max(0, parseInt(e.target.value) || 0))}
+                        className={`${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}
+                      />
+                    </div>
+                    <div>
+                      <Label className={theme === 'light' ? 'text-gray-700' : 'text-gray-300'}>Maintenance</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={equipmentMaintenance}
+                        onChange={(e) => setEquipmentMaintenance(Math.max(0, parseInt(e.target.value) || 0))}
+                        className={`${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Status</Label>
-                    <Select value={equipmentStatus} onValueChange={(value: any) => setEquipmentStatus(value)}>
-                      <SelectTrigger className={`mt-2 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-800 border-gray-700'}>
-                        <SelectItem value="available">Available</SelectItem>
-                        <SelectItem value="rented">Rented</SelectItem>
-                        <SelectItem value="maintenance">Maintenance</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className={`text-sm mt-2 ${theme === 'light' ? 'text-gray-700' : 'text-gray-300'}`}>
+                    Rentable: <b>{rentableNow}</b> (Available - Maintenance)
+                  </div>
+                </div>
+
+                <div>
+                  <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Status</Label>
+                  <Select value={equipmentStatus} onValueChange={(value: any) => setEquipmentStatus(value)}>
+                    <SelectTrigger className={`mt-2 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-800 border-gray-700'}>
+                      <SelectItem value="available">Available</SelectItem>
+                      <SelectItem value="rented">Rented</SelectItem>
+                      <SelectItem value="maintenance">Maintenance</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
+                    Categories * (select at least one)
+                  </Label>
+
+                  <div className={`mt-2 p-4 rounded-lg border ${theme === 'light' ? 'bg-gray-50 border-gray-200' : 'bg-gray-800 border-gray-700'}`}>
+                    {categories.length === 0 ? (
+                      <div className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                        No categories found. Make sure backend router has <b>equipment-categories</b>.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {categories.map((cat) => (
+                          <div key={cat.id} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id={`cat-add-${cat.id}`}
+                              checked={equipmentCategoryIds.includes(cat.id)}
+                              onChange={() => toggleCategoryId(cat.id)}
+                              className="rounded"
+                            />
+                            <label htmlFor={`cat-add-${cat.id}`} className={`cursor-pointer ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
+                              {cat.name}
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -710,7 +991,7 @@ export function AdminEquipmentManagement({
         </div>
       </div>
 
-      {/* ✅ Requests & Usage */}
+      {/* Requests & Usage */}
       <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -771,9 +1052,9 @@ export function AdminEquipmentManagement({
 
                       <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                         <div className="space-y-1">
-                          <div>{r.equipment_name || 'Equipment'}</div>
+                          <div>{r.equipment_name || (typeof r.equipment === 'object' ? r.equipment?.name : 'Equipment') || 'Equipment'}</div>
                           <div className={`text-xs ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                            {r.equipment_id || ''}
+                            {r.equipment_id || (typeof r.equipment === 'object' ? r.equipment?.equipment_id : '') || ''}
                           </div>
                         </div>
                       </TableCell>
@@ -865,9 +1146,9 @@ export function AdminEquipmentManagement({
 
                     <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
                       <div className="space-y-1">
-                        <div>{r.equipment_name || 'Equipment'}</div>
+                        <div>{r.equipment_name || (typeof r.equipment === 'object' ? r.equipment?.name : 'Equipment') || 'Equipment'}</div>
                         <div className={`text-xs ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                          {r.equipment_id || ''}
+                          {r.equipment_id || (typeof r.equipment === 'object' ? r.equipment?.equipment_id : '') || ''}
                         </div>
                       </div>
                     </TableCell>
@@ -922,7 +1203,8 @@ export function AdminEquipmentManagement({
               <TableRow className={theme === 'light' ? 'border-gray-200' : 'border-gray-800'}>
                 <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Equipment</TableHead>
                 <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>ID</TableHead>
-                <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Category</TableHead>
+                <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Categories</TableHead>
+                <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Qty (Avail)</TableHead>
                 <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Status</TableHead>
                 <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Actions</TableHead>
               </TableRow>
@@ -930,6 +1212,8 @@ export function AdminEquipmentManagement({
             <TableBody>
               {equipment.map((item) => {
                 const exportBusy = !!exportRentalsLoading[item.equipmentId];
+                const catNames = displayCategoryNames(item);
+
                 return (
                   <TableRow key={item.id} className={theme === 'light' ? 'border-gray-200' : 'border-gray-800'}>
                     <TableCell>
@@ -949,16 +1233,26 @@ export function AdminEquipmentManagement({
                     </TableCell>
 
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        {getCategoryIcon(item.category)}
-                        <span className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{item.category}</span>
+                      <div className="flex flex-wrap gap-1">
+                        {catNames.map((cat) => (
+                          <span
+                            key={cat}
+                            className={`text-xs px-2 py-1 rounded ${theme === 'light' ? 'bg-teal-100 text-teal-700' : 'bg-teal-500/20 text-teal-300'}`}
+                          >
+                            {cat}
+                          </span>
+                        ))}
                       </div>
+                    </TableCell>
+
+                    <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
+                      {item.quantity_available}
                     </TableCell>
 
                     <TableCell>
                       <Select
                         value={item.status}
-                        onValueChange={(value: 'available' | 'rented' | 'maintenance') => handleStatusChange(item.id, value)}
+                        onValueChange={(value: EquipmentUI['status']) => handleStatusChange(item.id, value)}
                       >
                         <SelectTrigger className={`w-[140px] border-0 ${getStatusColor(item.status)}`}>
                           <SelectValue />
@@ -973,7 +1267,6 @@ export function AdminEquipmentManagement({
 
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        {/* ✅ NEW BUTTON: Export Rentals for this Equipment ID */}
                         <Button
                           size="sm"
                           variant="ghost"
@@ -1010,7 +1303,7 @@ export function AdminEquipmentManagement({
 
               {!isLoading && equipment.length === 0 && (
                 <TableRow className={theme === 'light' ? 'border-gray-200' : 'border-gray-800'}>
-                  <TableCell colSpan={5} className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+                  <TableCell colSpan={6} className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
                     No equipment found.
                   </TableCell>
                 </TableRow>
@@ -1022,7 +1315,7 @@ export function AdminEquipmentManagement({
 
       {/* Edit Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className={`max-w-2xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+        <DialogContent className={`${dialogFitClass} ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
           <DialogHeader>
             <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Edit Equipment</DialogTitle>
             <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
@@ -1077,33 +1370,86 @@ export function AdminEquipmentManagement({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Category *</Label>
-                <Select value={equipmentCategory} onValueChange={setEquipmentCategory}>
-                  <SelectTrigger className={`mt-2 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}>
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-800 border-gray-700'}>
-                    {categories.map((cat) => (
-                      <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            {/* ✅ Inventory fields */}
+            <div>
+              <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Inventory *</Label>
+              <div className="grid grid-cols-3 gap-4 mt-2">
+                <div>
+                  <Label className={theme === 'light' ? 'text-gray-700' : 'text-gray-300'}>Total</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={equipmentTotal}
+                    onChange={(e) => setEquipmentTotal(Math.max(0, parseInt(e.target.value) || 0))}
+                    className={`${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}
+                  />
+                </div>
+                <div>
+                  <Label className={theme === 'light' ? 'text-gray-700' : 'text-gray-300'}>Available</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={equipmentAvailable}
+                    onChange={(e) => setEquipmentAvailable(Math.max(0, parseInt(e.target.value) || 0))}
+                    className={`${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}
+                  />
+                </div>
+                <div>
+                  <Label className={theme === 'light' ? 'text-gray-700' : 'text-gray-300'}>Maintenance</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={equipmentMaintenance}
+                    onChange={(e) => setEquipmentMaintenance(Math.max(0, parseInt(e.target.value) || 0))}
+                    className={`${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}
+                  />
+                </div>
               </div>
 
-              <div>
-                <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Status</Label>
-                <Select value={equipmentStatus} onValueChange={(value: any) => setEquipmentStatus(value)}>
-                  <SelectTrigger className={`mt-2 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-800 border-gray-700'}>
-                    <SelectItem value="available">Available</SelectItem>
-                    <SelectItem value="rented">Rented</SelectItem>
-                    <SelectItem value="maintenance">Maintenance</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className={`text-sm mt-2 ${theme === 'light' ? 'text-gray-700' : 'text-gray-300'}`}>
+                Rentable: <b>{rentableNow}</b> (Available - Maintenance)
+              </div>
+            </div>
+
+            <div>
+              <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Status</Label>
+              <Select value={equipmentStatus} onValueChange={(value: any) => setEquipmentStatus(value)}>
+                <SelectTrigger className={`mt-2 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-800 border-gray-700'}>
+                  <SelectItem value="available">Available</SelectItem>
+                  <SelectItem value="rented">Rented</SelectItem>
+                  <SelectItem value="maintenance">Maintenance</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Categories * (select at least one)</Label>
+              <div className={`mt-2 p-4 rounded-lg border ${theme === 'light' ? 'bg-gray-50 border-gray-200' : 'bg-gray-800 border-gray-700'}`}>
+                {categories.length === 0 ? (
+                  <div className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                    No categories found. Make sure backend router has <b>equipment-categories</b>.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {categories.map((cat) => (
+                      <div key={cat.id} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id={`cat-edit-${cat.id}`}
+                          checked={equipmentCategoryIds.includes(cat.id)}
+                          onChange={() => toggleCategoryId(cat.id)}
+                          className="rounded"
+                        />
+                        <label htmlFor={`cat-edit-${cat.id}`} className={`cursor-pointer ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
+                          {cat.name}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

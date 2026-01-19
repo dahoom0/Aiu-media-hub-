@@ -77,6 +77,12 @@ export function LabBookingPage() {
   const [isLoadingBookings, setIsLoadingBookings] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Action modals
+  const [showExtendModal, setShowExtendModal] = useState(false);
+  const [extendingBookingId, setExtendingBookingId] = useState<number | null>(null);
+  const [extendNewTimeSlot, setExtendNewTimeSlot] = useState('');
+  const [isActioning, setIsActioning] = useState(false);
+
   // Demo availability data - some dates are fully booked (kept as-is; UI only)
   const today = useMemo(() => {
     const t = new Date();
@@ -290,6 +296,77 @@ export function LabBookingPage() {
       toast.error('Failed to submit booking request.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // ✅ Cancel booking action
+  const handleCancel = async (bookingId: number) => {
+    if (!confirm('Are you sure you want to cancel this booking?')) return;
+
+    setIsActioning(true);
+    try {
+      await labBookingService.cancel(bookingId);
+      toast.success('Booking cancelled successfully.');
+      await fetchMyBookings();
+    } catch (e: any) {
+      const errorMsg = e?.response?.data?.detail || 'Failed to cancel booking.';
+      toast.error(errorMsg);
+    } finally {
+      setIsActioning(false);
+    }
+  };
+
+  // ✅ Open extend modal
+  const openExtendModal = (bookingId: number) => {
+    setExtendingBookingId(bookingId);
+    setExtendNewTimeSlot('');
+    setShowExtendModal(true);
+  };
+
+  // ✅ Extend booking action
+  const handleExtend = async () => {
+    if (!extendingBookingId) return;
+    if (!extendNewTimeSlot.trim()) {
+      toast.error('Please enter a new time slot.');
+      return;
+    }
+
+    const normalized = normalizeTimeSlot(extendNewTimeSlot);
+    if (!normalized) {
+      toast.error('Invalid time slot format. Use HH:MM-HH:MM');
+      return;
+    }
+
+    setIsActioning(true);
+    try {
+      await labBookingService.extend(extendingBookingId, normalized);
+      toast.success('Booking extended successfully.');
+      await fetchMyBookings();
+      setShowExtendModal(false);
+      setExtendingBookingId(null);
+      setExtendNewTimeSlot('');
+    } catch (e: any) {
+      const errorMsg = e?.response?.data?.detail || 'Failed to extend booking.';
+      toast.error(errorMsg);
+    } finally {
+      setIsActioning(false);
+    }
+  };
+
+  // ✅ Checkout booking action
+  const handleCheckout = async (bookingId: number) => {
+    if (!confirm('Are you sure you want to check out of this booking?')) return;
+
+    setIsActioning(true);
+    try {
+      await labBookingService.checkout(bookingId);
+      toast.success('Checked out successfully.');
+      await fetchMyBookings();
+    } catch (e: any) {
+      const errorMsg = e?.response?.data?.detail || 'Failed to checkout.';
+      toast.error(errorMsg);
+    } finally {
+      setIsActioning(false);
     }
   };
 
@@ -520,19 +597,45 @@ export function LabBookingPage() {
                     <p className="text-sm text-gray-500">{booking.purpose}</p>
                   </div>
 
-                  {/* Keep cancel button styling. (Only works if backend cancel action exists.) */}
-                  {booking.status === 'pending' && (
-                    <div className="flex gap-2">
+                  {/* Action buttons based on status */}
+                  <div className="flex flex-wrap gap-2">
+                    {/* Cancel - for pending bookings */}
+                    {booking.status === 'pending' && (
                       <Button
                         size="sm"
                         variant="outline"
                         className="border-red-500/50 text-red-400 hover:bg-red-500/10"
-                        onClick={() => toast.message('Cancel endpoint is not implemented on backend yet.')}
+                        onClick={() => handleCancel(booking.id)}
+                        disabled={isActioning}
                       >
-                        Cancel
+                        {isActioning ? 'Processing...' : 'Cancel'}
                       </Button>
-                    </div>
-                  )}
+                    )}
+
+                    {/* Extend - for confirmed/approved bookings */}
+                    {(booking.status === 'confirmed' || booking.status === 'approved') && (
+                      <Button
+                        size="sm"
+                        className="bg-blue-500/20 text-blue-400 border border-blue-500/50 hover:bg-blue-500/30"
+                        onClick={() => openExtendModal(booking.id)}
+                        disabled={isActioning}
+                      >
+                        {isActioning ? 'Processing...' : 'Extend'}
+                      </Button>
+                    )}
+
+                    {/* Checkout - for confirmed/approved bookings */}
+                    {(booking.status === 'confirmed' || booking.status === 'approved') && (
+                      <Button
+                        size="sm"
+                        className="bg-green-500/20 text-green-400 border border-green-500/50 hover:bg-green-500/30"
+                        onClick={() => handleCheckout(booking.id)}
+                        disabled={isActioning}
+                      >
+                        {isActioning ? 'Processing...' : 'Checkout'}
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ))}
           </div>
@@ -668,6 +771,57 @@ export function LabBookingPage() {
                 disabled={!canSubmit}
               >
                 {isSubmitting ? 'Submitting...' : 'Submit Request'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ Extend Booking Modal */}
+      <Dialog open={showExtendModal} onOpenChange={setShowExtendModal}>
+        <DialogContent className="max-w-md bg-gray-900 border-gray-800 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-white">Extend Booking</DialogTitle>
+            <DialogDescription className="text-gray-400">
+              Extend your booking to a new time slot (same day)
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-gray-300">New Time Slot</Label>
+              <Select
+                value={extendNewTimeSlot}
+                onValueChange={setExtendNewTimeSlot}
+              >
+                <SelectTrigger className="bg-gray-950 border-gray-700 text-white">
+                  <SelectValue placeholder="Select new time slot" />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-900 border-gray-800 text-white">
+                  {timeSlots.map((slot) => (
+                    <SelectItem key={slot} value={slot}>
+                      {slot}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                className="flex-1 border-gray-700 text-white hover:bg-gray-800"
+                onClick={() => setShowExtendModal(false)}
+              >
+                Cancel
+              </Button>
+
+              <Button
+                className="flex-1 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white"
+                onClick={handleExtend}
+                disabled={!extendNewTimeSlot || isActioning}
+              >
+                {isActioning ? 'Processing...' : 'Extend'}
               </Button>
             </div>
           </div>

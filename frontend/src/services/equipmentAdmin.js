@@ -1,15 +1,25 @@
 import api from './apiClient';
 
 /**
- * Backend fields (from your Django admin):
- * name, description, category, equipment_id, qr_code, image, status,
- * quantity_total, quantity_available, is_active
+ * Backend fields:
+ * Equipment: name, description, category (REQUIRED legacy CharField), equipment_id, image, status,
+ *            quantity_total, quantity_available (READ), quantity_under_maintenance, is_active
+ * EquipmentCategory: id, name, color (M2M via category_ids)
+ *
+ * Serializer behavior:
+ * - READ: categories: [{id,name,color}]
+ * - WRITE: category_ids: [1,2,3]   (sent as repeated keys in FormData)
+ *
+ * IMPORTANT:
+ * - Equipment.category is REQUIRED (CharField with choices):
+ *   ['camera','audio','lighting','accessories','other']
+ * - quantity_available is READ-ONLY in serializer -> do NOT send it in create/update
  */
 
 const BASE = '/equipment/';
 const RENTALS_BASE = '/equipment-rentals/';
+const CATEGORY_BASE = '/equipment-categories/';
 
-// Build origin from apiClient baseURL (http://localhost:8000/api -> http://localhost:8000)
 const getApiOrigin = () => {
   const base = api.defaults.baseURL || 'http://localhost:8000/api';
   return base.replace(/\/api\/?$/, '');
@@ -17,23 +27,15 @@ const getApiOrigin = () => {
 
 const normalizeImageUrl = (val) => {
   if (!val) return '';
-
   const ORIGIN = getApiOrigin() || 'http://localhost:8000';
 
-  // sometimes val is {url: "..."}
-  const s = typeof val === 'string' ? val : val?.url || '';
+  const s = typeof val === 'string' ? val : (val?.url || '');
   if (!s) return '';
 
   if (s.startsWith('http://') || s.startsWith('https://')) return s;
-
-  // "/media/xxx"
   if (s.startsWith('/media/')) return `${ORIGIN}${s}`;
-
-  // "media/xxx"
   if (s.startsWith('media/')) return `${ORIGIN}/${s}`;
-
-  // "equipment_images/xxx" (like Django admin shows)
-  return `${ORIGIN}/media/${s.replace(/^\/+/, '')}`;
+  return `${ORIGIN}/media/${String(s).replace(/^\/+/, '')}`;
 };
 
 const normalizeList = (data) => {
@@ -42,163 +44,279 @@ const normalizeList = (data) => {
   return [];
 };
 
-// ✅ category can be: "Camera" OR {id, name} OR number
-const normalizeCategory = (cat) => {
-  if (!cat) return '';
-  if (typeof cat === 'string') return cat;
+// categories read shape: [{id,name,color}]
+const normalizeCategoryObj = (cat) => {
+  if (!cat) return null;
   if (typeof cat === 'object') {
-    // common DRF nested serializer: {id, name}
-    if (cat.name) return String(cat.name);
-    if (cat.title) return String(cat.title);
-    if (cat.label) return String(cat.label);
-    // fallback: try id
-    if (cat.id !== undefined && cat.id !== null) return String(cat.id);
+    return {
+      id: cat.id,
+      name: String(cat.name || ''),
+      color: cat.color || null,
+    };
   }
-  // number / other primitive
-  return String(cat);
+  return null;
 };
 
-// Map backend equipment -> UI object used in React table
+const normalizeCategoriesObjs = (cats) => {
+  if (!cats) return [];
+  if (Array.isArray(cats)) return cats.map(normalizeCategoryObj).filter(Boolean);
+  const one = normalizeCategoryObj(cats);
+  return one ? [one] : [];
+};
+
+const safeStatus = (s) => String(s || 'available').toLowerCase();
+const normalizeStatus = (s) => {
+  const x = safeStatus(s);
+  if (x.includes('maint')) return 'maintenance';
+  if (x.includes('rent')) return 'rented';
+  if (x.includes('avail')) return 'available';
+  return x || 'available';
+};
+
+// ✅ map UI/category name -> backend legacy choices
+const normalizeLegacyCategory = (val) => {
+  const s = String(val || '').toLowerCase().trim();
+  if (!s) return 'other';
+
+  // handle typos/plurals from UI
+  if (s.includes('audio')) return 'audio';
+  if (s.includes('access')) return 'accessories';
+  if (s.includes('light')) return 'lighting';
+  if (s.includes('camera') || s.includes('camer')) return 'camera';
+
+  // if backend already sends proper choice, keep it
+  if (['camera', 'audio', 'lighting', 'accessories', 'other'].includes(s)) return s;
+
+  return 'other';
+};
+
+// Map backend equipment -> UI object
 const toUI = (x) => {
+  const categoriesObjs = normalizeCategoriesObjs(x?.categories);
+
+  const total =
+    (typeof x?.quantity_total === 'number' && x.quantity_total) ||
+    (typeof x?.quantity === 'number' && x.quantity) ||
+    Number(x?.quantity_total ?? x?.quantity ?? 1);
+
+  const quantity_available =
+    typeof x?.quantity_available === 'number' ? x.quantity_available : undefined;
+
+  const quantity_under_maintenance =
+    typeof x?.quantity_under_maintenance === 'number' ? x.quantity_under_maintenance : undefined;
+
   return {
     id: String(x.id),
     name: x.name || '',
     equipmentId: x.equipment_id || x.equipmentId || '',
-    category: normalizeCategory(x.category),
-    status: (x.status || 'available').toLowerCase(),
+
+    // ✅ legacy single category string
+    category: x.category || 'other',
+
+    // ✅ categories objects + ids (M2M)
+    categories: categoriesObjs,
+    category_ids: categoriesObjs.map((c) => c.id),
+
+    quantity: Number.isFinite(Number(total)) ? Number(total) : 1,
+    quantity_total: x.quantity_total,
+    quantity_available,
+    quantity_under_maintenance,
+
+    status: normalizeStatus(x.status),
     imageUrl: normalizeImageUrl(x.image),
     description: x.description || '',
-
-    // keep backend fields too (optional if you need later)
-    quantity_total: x.quantity_total,
-    quantity_available: x.quantity_available,
     is_active: x.is_active,
     qr_code: x.qr_code,
   };
 };
 
+// ---------- FormData helpers ----------
+const appendIfDefined = (fd, key, value) => {
+  if (value === undefined || value === null) return;
+  fd.append(key, String(value));
+};
+
+const appendCategoryIds = (fd, category_ids) => {
+  if (!Array.isArray(category_ids)) return;
+  category_ids
+    .filter((id) => id !== null && id !== undefined && id !== '')
+    .forEach((id) => fd.append('category_ids', String(id)));
+};
+
+// ✅ ensure required legacy `category` is always sent
+const appendRequiredLegacyCategory = (fd, payloadCategory, category_ids, categoriesLookup) => {
+  // 1) if UI already provides a legacy category string, use it
+  if (payloadCategory) {
+    fd.append('category', normalizeLegacyCategory(payloadCategory));
+    return;
+  }
+
+  // 2) try infer from first selected EquipmentCategory name
+  const firstId = Array.isArray(category_ids) && category_ids.length > 0 ? category_ids[0] : null;
+
+  if (firstId && Array.isArray(categoriesLookup)) {
+    const found = categoriesLookup.find((c) => String(c.id) === String(firstId));
+    if (found?.name) {
+      fd.append('category', normalizeLegacyCategory(found.name));
+      return;
+    }
+  }
+
+  // 3) fallback
+  fd.append('category', 'other');
+};
+
 const equipmentAdmin = {
+  // -------------------------
+  // CATEGORIES
+  // -------------------------
+  listCategories: async () => {
+    const res = await api.get(CATEGORY_BASE);
+    return normalizeList(res.data); // [{id,name,color}]
+  },
+
   // -------------------------
   // EQUIPMENT CRUD
   // -------------------------
-
-  // GET all equipment
   list: async () => {
     const res = await api.get(BASE);
-    const items = normalizeList(res.data);
-    return items.map(toUI);
+    return normalizeList(res.data).map(toUI);
   },
 
-  // CREATE equipment (multipart)
-  create: async (payload) => {
+  create: async (payload = {}) => {
     const {
       name,
       description,
-      category,
       status,
+
+      // quantities
       quantity_total,
-      quantity_available,
+      quantity_under_maintenance,
+
+      // legacy alias
+      quantity,
+
+      // ✅ legacy category string (optional if UI provides)
+      category,
+
+      // optional: pass categories list from UI so we can infer category string from first id
+      categoriesLookup,
+
       is_active,
       imageFile,
       qrFile,
-
-      // support both naming styles:
       equipmentId,
       equipment_id,
-    } = payload || {};
+
+      // category ids from UI
+      category_ids,
+    } = payload;
 
     const finalEquipmentId = equipmentId ?? equipment_id ?? '';
+    const finalStatus = normalizeStatus(status || 'available');
 
     const fd = new FormData();
     fd.append('name', name);
     fd.append('description', description || '');
-    fd.append('category', category);
     fd.append('equipment_id', finalEquipmentId);
-    fd.append('status', status);
+    fd.append('status', finalStatus);
 
-    if (quantity_total !== undefined && quantity_total !== null)
-      fd.append('quantity_total', String(quantity_total));
-    if (quantity_available !== undefined && quantity_available !== null)
-      fd.append('quantity_available', String(quantity_available));
-    if (is_active !== undefined && is_active !== null)
-      fd.append('is_active', String(is_active));
+    // Prefer explicit quantity_total; fallback to legacy `quantity`
+    const totalToSend =
+      quantity_total !== undefined && quantity_total !== null ? quantity_total : quantity;
+
+    appendIfDefined(fd, 'quantity_total', totalToSend);
+
+    // ✅ DO NOT send quantity_available (read-only in serializer)
+    appendIfDefined(fd, 'quantity_under_maintenance', quantity_under_maintenance);
+    appendIfDefined(fd, 'is_active', is_active);
+
+    // ✅ M2M categories
+    appendCategoryIds(fd, category_ids);
+
+    // ✅ REQUIRED legacy category (CharField choices)
+    appendRequiredLegacyCategory(fd, category, category_ids, categoriesLookup);
 
     if (imageFile) fd.append('image', imageFile);
     if (qrFile) fd.append('qr_code', qrFile);
 
-    const res = await api.post(BASE, fd);
+    const res = await api.post(BASE, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
     return toUI(res.data);
   },
 
-  // UPDATE equipment (PATCH multipart so files can be updated)
   update: async (id, payload = {}) => {
     const fd = new FormData();
 
     if (payload.name !== undefined) fd.append('name', payload.name);
-    if (payload.description !== undefined)
-      fd.append('description', payload.description || '');
+    if (payload.description !== undefined) fd.append('description', payload.description || '');
 
-    if (payload.category !== undefined) fd.append('category', payload.category);
-
-    // support both equipmentId and equipment_id
     const finalEquipmentId = payload.equipmentId ?? payload.equipment_id;
-    if (finalEquipmentId !== undefined) fd.append('equipment_id', finalEquipmentId);
+    if (finalEquipmentId !== undefined) fd.append('equipment_id', String(finalEquipmentId));
 
-    if (payload.status !== undefined) fd.append('status', payload.status);
+    if (payload.status !== undefined) fd.append('status', normalizeStatus(payload.status));
 
-    if (payload.quantity_total !== undefined && payload.quantity_total !== null)
-      fd.append('quantity_total', String(payload.quantity_total));
-    if (payload.quantity_available !== undefined && payload.quantity_available !== null)
-      fd.append('quantity_available', String(payload.quantity_available));
-    if (payload.is_active !== undefined && payload.is_active !== null)
-      fd.append('is_active', String(payload.is_active));
+    // quantities (prefer quantity_total, fallback to legacy `quantity`)
+    const totalToSend =
+      payload.quantity_total !== undefined && payload.quantity_total !== null
+        ? payload.quantity_total
+        : payload.quantity;
+
+    appendIfDefined(fd, 'quantity_total', totalToSend);
+
+    // ✅ DO NOT send quantity_available (read-only in serializer)
+    appendIfDefined(fd, 'quantity_under_maintenance', payload.quantity_under_maintenance);
+    appendIfDefined(fd, 'is_active', payload.is_active);
+
+    // categories (M2M)
+    if (Array.isArray(payload.category_ids)) {
+      appendCategoryIds(fd, payload.category_ids);
+    }
+
+    // ✅ REQUIRED legacy category (always ensure exists)
+    if (payload.category !== undefined || Array.isArray(payload.category_ids)) {
+      appendRequiredLegacyCategory(fd, payload.category, payload.category_ids, payload.categoriesLookup);
+    }
 
     if (payload.imageFile) fd.append('image', payload.imageFile);
     if (payload.qrFile) fd.append('qr_code', payload.qrFile);
 
-    const res = await api.patch(`${BASE}${id}/`, fd);
+    const res = await api.patch(`${BASE}${id}/`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
     return toUI(res.data);
   },
 
-  // Update status only
   updateStatus: async (id, status) => {
-    const res = await api.patch(`${BASE}${id}/`, { status });
+    const res = await api.patch(`${BASE}${id}/`, { status: normalizeStatus(status) });
     return toUI(res.data);
   },
 
-  // Delete
   remove: async (id) => {
     await api.delete(`${BASE}${id}/`);
   },
 
-  // ✅ EXPORT INVENTORY (CSV)
-  // IMPORTANT: must be "/equipment/export/" + blob
   exportInventory: async () => {
-    const res = await api.get(`${BASE}export/`, {
-      responseType: 'blob',
-    });
-    return res; // return axios response so frontend can read headers + blob
+    const res = await api.get(`${BASE}export/`, { responseType: 'blob' });
+    return res;
   },
 
   // -------------------------
   // RENTALS ADMIN
   // -------------------------
-
-  // GET all rentals (admin sees all due to backend permissions)
   listRentals: async () => {
     const res = await api.get(RENTALS_BASE);
     return res.data;
   },
 
-  // Approve a rental request
   approveRental: async (id) => {
     const res = await api.post(`${RENTALS_BASE}${id}/approve/`);
     return res.data;
   },
 
-  // Reject a rental request (send reject_reason to match backend)
   rejectRental: async (id, reason) => {
-    const payload = { reject_reason: (reason || 'Rejected by admin') };
+    const payload = { reject_reason: reason || 'Rejected by admin' };
     const res = await api.post(`${RENTALS_BASE}${id}/reject/`, payload);
     return res.data;
   },

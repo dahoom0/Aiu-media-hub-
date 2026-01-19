@@ -1,6 +1,8 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import RegexValidator, MinValueValidator, MaxValueValidator
+from django.core.exceptions import ValidationError
+
 import qrcode
 from io import BytesIO
 from django.core.files import File
@@ -184,12 +186,10 @@ class LabBooking(models.Model):
     lab = models.ForeignKey(Lab, on_delete=models.CASCADE, related_name='bookings')
     student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='lab_bookings')
 
-    # Date & time
     booking_date = models.DateField()
     start_time = models.TimeField()
     end_time = models.TimeField()
 
-    # Frontend-friendly label for timeslot (e.g. "09:00-11:00")
     time_slot = models.CharField(
         max_length=20,
         blank=True,
@@ -197,7 +197,6 @@ class LabBooking(models.Model):
         help_text='Time slot label, e.g. "09:00-11:00"',
     )
 
-    # Specific iMac in BMC Lab (1–30)
     imac_number = models.PositiveSmallIntegerField(
         blank=True,
         null=True,
@@ -209,7 +208,6 @@ class LabBooking(models.Model):
     participants = models.IntegerField(default=1)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
 
-    # Admin review
     reviewed_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -235,8 +233,25 @@ class LabBooking(models.Model):
         return f"{self.lab.name} - {self.student.username} - {self.booking_date} - iMac {self.imac_number}"
 
 
+# ===================== NEW: EQUIPMENT CATEGORIES (M2M) =====================
+
+class EquipmentCategory(models.Model):
+    """Equipment categories (DO NOT reuse Tutorial Category)"""
+    name = models.CharField(max_length=100, unique=True)
+    color = models.CharField(max_length=30, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'equipment_categories'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
 class Equipment(models.Model):
-    """Equipment inventory"""
+    """Equipment inventory (AUTO inventory logic: total + maintenance only)."""
+
     CATEGORY_CHOICES = (
         ('camera', 'Camera'),
         ('audio', 'Audio'),
@@ -254,14 +269,27 @@ class Equipment(models.Model):
 
     name = models.CharField(max_length=255)
     description = models.TextField()
-    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES)
+    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES)  # keep for backward-compat
     equipment_id = models.CharField(max_length=50, unique=True)
     qr_code = models.ImageField(upload_to='qr_codes/', blank=True, null=True)
     image = models.ImageField(upload_to='equipment_images/', blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='available')
+
+    # ✅ Admin controls ONLY these:
     quantity_total = models.IntegerField(default=1)
+    quantity_under_maintenance = models.IntegerField(default=0)
+
+    # ✅ Keep DB column for compatibility, but AUTO-SYNC it (admin must NOT manually manage it)
     quantity_available = models.IntegerField(default=1)
+
     is_active = models.BooleanField(default=True)
+
+    categories = models.ManyToManyField(
+        EquipmentCategory,
+        blank=True,
+        related_name='equipment',
+        through='EquipmentCategoryMapping'
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -273,7 +301,81 @@ class Equipment(models.Model):
     def __str__(self):
         return f"{self.name} ({self.equipment_id})"
 
+    # ------------------------------
+    # ✅ LIVE RENTED COUNT (SAFE ON CREATE)
+    # ------------------------------
+    def rented_units(self) -> int:
+        """
+        Each approved/active/overdue rental counts as 1 unit (because rental has no quantity field).
+        IMPORTANT: When creating Equipment (no PK yet), reverse relation can't be used -> return 0.
+        """
+        if not self.pk:
+            return 0
+        return self.rentals.filter(status__in=['approved', 'active', 'overdue']).count()
+
+    @property
+    def computed_available(self) -> int:
+        total = int(self.quantity_total or 0)
+        rented = int(self.rented_units() or 0)
+        return max(total - rented, 0)
+
+    @property
+    def rentable_quantity(self) -> int:
+        return max(self.computed_available - int(self.quantity_under_maintenance or 0), 0)
+
+    def clean(self):
+        # -------- integer checks --------
+        for f in ["quantity_total", "quantity_available", "quantity_under_maintenance"]:
+            v = getattr(self, f, None)
+            try:
+                v = int(v)
+            except Exception:
+                raise ValidationError({f: "Must be an integer."})
+            if v < 0:
+                raise ValidationError({f: "Cannot be negative."})
+
+        total = int(self.quantity_total or 0)
+        maint = int(self.quantity_under_maintenance or 0)
+
+        # ✅ safe: object may not have pk during create -> rentals can't be queried yet
+        rented = int(self.rented_units() or 0) if self.pk else 0
+
+        # total cannot be less than currently rented units
+        if total < rented:
+            raise ValidationError({
+                "quantity_total": f"Total cannot be less than currently rented units ({rented})."
+            })
+
+        # maintenance must be <= available (not rented)
+        available_now = max(total - rented, 0)
+        if maint > available_now:
+            raise ValidationError({
+                "quantity_under_maintenance": (
+                    f"Under maintenance is too high. "
+                    f"Only units NOT rented can be marked maintenance. "
+                    f"Max allowed now is {available_now}."
+                )
+            })
+
     def save(self, *args, **kwargs):
+        # validate before saving (admin edits included)
+        self.full_clean()
+
+        # ✅ Auto-sync stored available so Django admin + API never show wrong values
+        self.quantity_available = self.computed_available
+
+        # ✅ Auto status (optional)
+        if self.rentable_quantity <= 0:
+            if self.quantity_under_maintenance > 0:
+                self.status = 'maintenance'
+            elif self.rented_units() > 0:
+                self.status = 'rented'
+            else:
+                self.status = 'available'
+        else:
+            self.status = 'available'
+
+        # QR generation unchanged
         if not self.qr_code and self.equipment_id:
             qr = qrcode.QRCode(version=1, box_size=10, border=5)
             qr.add_data(self.equipment_id)
@@ -287,6 +389,21 @@ class Equipment(models.Model):
             self.qr_code.save(file_name, File(buffer), save=False)
 
         super().save(*args, **kwargs)
+
+
+class EquipmentCategoryMapping(models.Model):
+    """Custom intermediary table for Equipment-EquipmentCategory ManyToMany relationship"""
+    equipment = models.ForeignKey(Equipment, on_delete=models.CASCADE)
+    category = models.ForeignKey(EquipmentCategory, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'equipment_category_mapping'
+        unique_together = ('equipment', 'category')
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.equipment.name} - {self.category.name}"
 
 
 class EquipmentRental(models.Model):
@@ -303,7 +420,6 @@ class EquipmentRental(models.Model):
     equipment = models.ForeignKey(Equipment, on_delete=models.CASCADE, related_name='rentals')
     student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='equipment_rentals')
 
-    # request info
     pickup_date = models.DateField(null=True, blank=True)
     duration_days = models.PositiveSmallIntegerField(default=1)
 
@@ -314,7 +430,6 @@ class EquipmentRental(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     notes = models.TextField(blank=True, null=True)
 
-    # admin review
     issued_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='issued_rentals')
     returned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='received_returns')
 
@@ -326,11 +441,77 @@ class EquipmentRental(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class EquipmentRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('partial', 'Partial'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('cancelled', 'Cancelled'),
+    )
+
+    student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='equipment_requests')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    notes = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'equipment_requests'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Request #{self.id} - {self.student.username} - {self.status}"
+
+
+class EquipmentRequestItem(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('cancelled', 'Cancelled'),
+    )
+
+    request = models.ForeignKey(EquipmentRequest, on_delete=models.CASCADE, related_name='items')
+    equipment = models.ForeignKey(Equipment, on_delete=models.CASCADE, related_name='request_items')
+
+    quantity = models.PositiveIntegerField(default=1)
+    duration_days = models.PositiveSmallIntegerField(default=1)
+    notes = models.TextField(blank=True, null=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_equipment_request_items'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reject_reason = models.TextField(blank=True, null=True)
+
+    rental = models.OneToOneField(
+        EquipmentRental,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='request_item'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'equipment_request_items'
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"RequestItem #{self.id} - {self.equipment.equipment_id} x{self.quantity} ({self.status})"
+
 
 # ---- CV + rest unchanged below ----
-# (I’m not touching anything else in your file; keep your CV models exactly as you have them.)
-
-
 
 class CV(models.Model):
     """Student CV/Portfolio"""
@@ -345,22 +526,18 @@ class CV(models.Model):
     student = models.OneToOneField(User, on_delete=models.CASCADE, related_name='cv')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
 
-    # Profile Image for CV
     profile_image = models.ImageField(upload_to='cv_photos/', null=True, blank=True)
 
-    # Personal Information
     full_name = models.CharField(max_length=255)
     title = models.CharField(max_length=255, blank=True, null=True)
     summary = models.TextField(blank=True, null=True)
 
-    # Contact
     email = models.EmailField()
     phone = models.CharField(max_length=20)
     location = models.CharField(max_length=255, blank=True, null=True)
     linkedin = models.URLField(blank=True, null=True)
     portfolio_website = models.URLField(blank=True, null=True)
 
-    # Admin review
     reviewed_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -385,11 +562,10 @@ class CV(models.Model):
 
 
 class Education(models.Model):
-    """CV Education entries"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='education')
     degree = models.CharField(max_length=255)
     institution = models.CharField(max_length=255)
-    start_date = models.CharField(max_length=20)  # flexible string
+    start_date = models.CharField(max_length=20)
     end_date = models.CharField(max_length=20)
     description = models.TextField(blank=True, null=True)
     order = models.IntegerField(default=0)
@@ -403,7 +579,6 @@ class Education(models.Model):
 
 
 class Experience(models.Model):
-    """CV Work Experience entries"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='experience')
     position = models.CharField(max_length=255)
     company = models.CharField(max_length=255)
@@ -421,7 +596,6 @@ class Experience(models.Model):
 
 
 class Project(models.Model):
-    """CV Project entries"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='projects')
     name = models.CharField(max_length=255)
     description = models.TextField()
@@ -438,7 +612,6 @@ class Project(models.Model):
 
 
 class Certification(models.Model):
-    """CV Certification entries"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='certifications')
     name = models.CharField(max_length=255)
     issuer = models.CharField(max_length=255)
@@ -455,7 +628,6 @@ class Certification(models.Model):
 
 
 class Involvement(models.Model):
-    """CV Extracurricular/Leadership entries"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='involvement')
     role = models.CharField(max_length=255)
     organization = models.CharField(max_length=255)
@@ -472,7 +644,6 @@ class Involvement(models.Model):
 
 
 class Skill(models.Model):
-    """CV Skills"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='skills')
     name = models.CharField(max_length=100)
     order = models.IntegerField(default=0)
@@ -486,7 +657,6 @@ class Skill(models.Model):
 
 
 class Reference(models.Model):
-    """CV References"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='references')
     name = models.CharField(max_length=255)
     position = models.CharField(max_length=255)
@@ -503,13 +673,10 @@ class Reference(models.Model):
         return self.name
 
 
-# ========= NEW MODELS FOR LANGUAGES & AWARDS =========
-
 class Language(models.Model):
-    """CV Languages"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='languages')
-    name = models.CharField(max_length=100)          # e.g. "English"
-    proficiency = models.CharField(max_length=50)    # e.g. "Fluent"
+    name = models.CharField(max_length=100)
+    proficiency = models.CharField(max_length=50)
     order = models.IntegerField(default=0)
 
     class Meta:
@@ -521,11 +688,10 @@ class Language(models.Model):
 
 
 class Award(models.Model):
-    """CV Awards & Honours"""
     cv = models.ForeignKey(CV, on_delete=models.CASCADE, related_name='awards')
-    title = models.CharField(max_length=255)          # Award title
-    issuer = models.CharField(max_length=255, blank=True, null=True)  # Who gave it
-    year = models.CharField(max_length=20, blank=True, null=True)     # You used 'date' in UI, keep year here
+    title = models.CharField(max_length=255)
+    issuer = models.CharField(max_length=255, blank=True, null=True)
+    year = models.CharField(max_length=20, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
     order = models.IntegerField(default=0)
 

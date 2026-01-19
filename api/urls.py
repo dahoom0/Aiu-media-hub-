@@ -21,6 +21,10 @@ router.register(r'lab-bookings', views.LabBookingViewSet, basename='lab-booking'
 router.register(r'equipment', views.EquipmentViewSet, basename='equipment')
 router.register(r'equipment-rentals', views.EquipmentRentalViewSet, basename='equipment-rental')
 
+# ✅ NEW: Equipment categories + requests
+router.register(r'equipment-categories', views.EquipmentCategoryViewSet, basename='equipment-category')
+router.register(r'equipment-requests', views.EquipmentRequestViewSet, basename='equipment-request')
+
 # --- CV MAIN ---
 router.register(r'cvs', views.CVViewSet, basename='cv')
 
@@ -33,7 +37,7 @@ router.register(r'involvement', views.InvolvementViewSet, basename='involvement'
 router.register(r'skills', views.SkillViewSet, basename='skill')
 router.register(r'references', views.ReferenceViewSet, basename='reference')
 
-# --- NEW ---
+# --- NEW CV ---
 router.register(r'languages', views.LanguageViewSet, basename='language')
 router.register(r'awards', views.AwardViewSet, basename='award')
 

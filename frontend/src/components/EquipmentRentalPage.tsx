@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -21,7 +21,9 @@ import {
   Calendar,
   Clock,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  ShoppingCart,
+  Trash2,
 } from 'lucide-react';
 import { QRScanner } from './QRScanner';
 import { useTheme } from './ThemeProvider';
@@ -31,8 +33,40 @@ interface EquipmentRentalPageProps {
   onNavigate?: (page: string) => void;
 }
 
+/**
+ * IMPORTANT:
+ * - UI uses BOTH:
+ *   - equipmentPk: Equipment.id (PK)         (for request/bundle endpoints if you use them)
+ *   - equipmentCode: Equipment.equipment_id  (CAM001) -> used by /equipment/checkout/ in your backend
+ */
+type CartLine = {
+  equipmentPk: number;
+  equipmentCode: string;
+
+  name: string;
+  image?: string;
+
+  available: number;
+  quantity: number;
+  durationDays: number;
+  notes: string;
+
+  categoryText?: string;
+};
+
 export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
   const { theme } = useTheme();
+
+  // Backend origin for media URLs (baseURL is /api but media is served from root)
+  const BACKEND_ORIGIN = 'http://localhost:8000';
+
+  const resolveMediaUrl = (src?: string) => {
+    if (!src) return '';
+    if (/^https?:\/\//i.test(src)) return src;
+    if (src.startsWith('/media/')) return `${BACKEND_ORIGIN}${src}`;
+    if (src.startsWith('/')) return `${BACKEND_ORIGIN}${src}`;
+    return src;
+  };
 
   // --- STATE ---
   const [searchQuery, setSearchQuery] = useState('');
@@ -41,7 +75,13 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
   const [showRentalModal, setShowRentalModal] = useState(false);
   const [showQRScanner, setShowQRScanner] = useState(false);
 
-  // --- FORM STATE ---
+  // --- CART STATE ---
+  const [cartOpen, setCartOpen] = useState(false);
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [bundleNotes, setBundleNotes] = useState('');
+  const [cartSubmitting, setCartSubmitting] = useState(false);
+
+  // --- FORM STATE (single rent modal kept) ---
   const [rentalDuration, setRentalDuration] = useState('1');
   const [pickupDate, setPickupDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedAccessories, setSelectedAccessories] = useState<string[]>([]);
@@ -67,9 +107,50 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
   };
 
   const safeLower = (v: any) => String(v ?? '').toLowerCase().trim();
-  const toTitleCase = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-  // ---- My Bookings status helpers (same behavior as Lab Booking) ----
+  // ✅ NEW: normalize category names -> tab slugs (camera/audio/lighting/accessories)
+  const toCatSlug = (name: any) => {
+    const n = safeLower(name);
+
+    // handle plural + variations
+    if (n.includes('camera')) return 'camera';
+    if (n.includes('audio') || n.includes('mic')) return 'audio';
+    if (n.includes('light')) return 'lighting';
+    if (n.includes('access')) return 'accessories';
+    if (n.includes('other')) return 'other';
+
+    return n.replace(/\s+/g, '-');
+  };
+
+  // ✅ NEW: derive slugs from M2M categories + legacy "category" field
+  const extractCatSlugs = (item: any) => {
+    const cats = Array.isArray(item?.categories) ? item.categories : [];
+
+    const names = cats
+      .map((c: any) => (typeof c === 'object' ? c?.name ?? c?.label ?? c?.title : c))
+      .filter(Boolean);
+
+    const slugsFromCats = names.map(toCatSlug).filter(Boolean);
+
+    const legacy = item?.category; // could be "camera" OR "cameras audio lighting"
+    // if legacy is a big string, split by non-letters and map each token
+    const legacyTokens =
+      typeof legacy === 'string'
+        ? legacy
+            .split(/[^a-zA-Z]+/g)
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : legacy
+          ? [legacy]
+          : [];
+
+    const legacySlugs = legacyTokens.map(toCatSlug).filter(Boolean);
+
+    const merged = [...slugsFromCats, ...legacySlugs].filter(Boolean);
+    return Array.from(new Set(merged));
+  };
+
+  // ---- My Bookings status helpers ----
   const getStatusIcon = (status: string) => {
     const s = safeLower(status);
 
@@ -110,75 +191,131 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     }
   };
 
-  // Sort key: prefer rental_date/created_at; fallback to id (newer id = newer)
+  // Sort key: prefer rental_date/created_at; fallback to id
   const getRentalSortKey = (r: any) => {
-    const raw =
-      r?.rental_date ||
-      r?.created_at ||
-      r?.pickup_date ||
-      r?.start_date ||
-      null;
-
+    const raw = r?.rental_date || r?.created_at || r?.pickup_date || r?.start_date || null;
     const ms = raw ? new Date(raw).getTime() : 0;
     const id = typeof r?.id === 'number' ? r.id : 0;
-
-    // combine so date dominates; if date missing, id still gives correct order
     return (Number.isFinite(ms) ? ms : 0) * 1000 + id;
+  };
+
+  const cartCount = useMemo(() => cart.reduce((sum, x) => sum + (Number(x.quantity) || 0), 0), [cart]);
+
+  // live inventory map from current equipmentList cards (keyed by equipmentCode CAM001)
+  const availableByEquipmentCode = useMemo(() => {
+    const m = new Map<string, number>();
+    equipmentList.forEach((x: any) => {
+      const code = String(x?.equipmentCode || x?.qrCode || '').trim();
+      if (!code) return;
+      m.set(code, Number(x?.quantity_available ?? 0));
+    });
+    return m;
+  }, [equipmentList]);
+
+  const refreshCartAvailabilityFromCatalog = () => {
+    setCart((prev) =>
+      prev.map((line) => {
+        const latestAvail = availableByEquipmentCode.get(line.equipmentCode);
+        const available = Number(latestAvail ?? line.available ?? 0);
+
+        if (available <= 0) {
+          return { ...line, available, quantity: 0 };
+        }
+
+        const q = Number(line.quantity) || 1;
+        const nextQ = Math.max(1, Math.min(available, q));
+        return { ...line, available, quantity: nextQ };
+      })
+    );
   };
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [allEquipmentRes, rentalsRes] = await Promise.all([
-        equipmentService.getAll(),
-        equipmentService.getRentals(),
-      ]);
+      const [allEquipmentRes, rentalsRes] = await Promise.all([equipmentService.getAll(), equipmentService.getRentals()]);
 
       const rawEquipment = asArray(allEquipmentRes);
       const rawRentals = asArray(rentalsRes);
 
-      // Accessories list
+      // Accessories list (categories from service are often strings -> handle both strings & objects)
       const accessoriesFromDB = rawEquipment.filter((item: any) => {
+        const cats = Array.isArray(item?.categories) ? item.categories : [];
+        const catsStr = cats
+          .map((c: any) => String(typeof c === 'object' ? c?.name ?? c?.label ?? c?.title ?? '' : c ?? ''))
+          .join(' ')
+          .toLowerCase();
+
         const cat = item?.category;
         const catStr =
           typeof cat === 'string'
             ? cat.toLowerCase()
             : typeof cat?.name === 'string'
               ? cat.name.toLowerCase()
-              : '';
-        return catStr.includes('access');
+              : typeof cat?.label === 'string'
+                ? cat.label.toLowerCase()
+                : '';
+
+        return (catsStr + ' ' + catStr).includes('access');
       });
       setAccessoryList(accessoriesFromDB);
 
-      // Map equipment cards
+      // Map equipment cards (robust against service shape)
       const mappedEquipment = rawEquipment.map((item: any) => {
-        const cat = item?.category;
-        const categoryString =
-          typeof cat === 'string'
-            ? cat.toLowerCase()
-            : typeof cat?.name === 'string'
-              ? cat.name.toLowerCase()
-              : 'cameras';
+        const categoriesArr = Array.isArray(item?.categories) ? item.categories : [];
+
+        const categoriesText = categoriesArr
+          .map((c: any) => String(typeof c === 'object' ? c?.name ?? c?.label ?? c?.title ?? '' : c ?? '').trim())
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+
+        const oldCat = item?.category;
+        const oldCatText =
+          typeof oldCat === 'string'
+            ? oldCat.toLowerCase()
+            : typeof oldCat?.name === 'string'
+              ? oldCat.name.toLowerCase()
+              : typeof oldCat?.label === 'string'
+                ? oldCat.label.toLowerCase()
+                : '';
+
+        const categoryString = categoriesText || oldCatText || 'cameras';
+
+        const pk = Number(item?.pk ?? item?.id);
+        const equipmentCode = String(
+          item?.equipmentCode ?? item?.equipmentId ?? item?.equipment_id ?? item?.qrCode ?? ''
+        ).trim();
+
+        // ✅ NEW: correct slugs for tabs
+        const categorySlugs = extractCatSlugs(item);
 
         return {
-          id: item.id,
-          name: item.name,
-          category: categoryString,
-          status: item.status,
-          qrCode: item.equipment_id,
-          specs: item.description || 'Professional equipment',
-          image: item.image,
-          quantity_available: item.quantity_available,
+          pk: Number.isFinite(pk) ? pk : 0,
+          id: Number.isFinite(pk) ? pk : 0,
+
+          name: item?.name || '',
+          category: categoryString, // old display-ish text
+          categorySlugs, // ✅ use this for tab filtering
+
+          status: item?.status || 'available',
+
+          qrCode: equipmentCode,
+          equipmentCode,
+
+          specs: item?.description || item?.specs || 'Professional equipment',
+          image: item?.image || '',
+          quantity_available: Number(item?.quantity_available ?? item?.quantityAvailable ?? 0),
+          categories: categoriesArr,
         };
       });
 
       // Lookup for joining if rental.equipment is FK id
       const equipmentById = new Map<number, any>();
       rawEquipment.forEach((eq: any) => {
-        if (typeof eq?.id === 'number') equipmentById.set(eq.id, eq);
+        const id = Number(eq?.id);
+        if (Number.isFinite(id)) equipmentById.set(id, eq);
       });
 
-      // ✅ Latest 5 rentals INCLUDING pending/approved/etc
       const recent5 = [...rawRentals]
         .sort((a: any, b: any) => getRentalSortKey(b) - getRentalSortKey(a))
         .slice(0, 5)
@@ -196,18 +333,13 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
           const eqFromCatalog = equipmentId ? equipmentById.get(equipmentId) : null;
 
           const name =
-            eqFromRental?.name ||
-            eqFromCatalog?.name ||
-            rental?.equipment_name ||
-            rental?.equipment_title ||
-            'Equipment';
+            eqFromRental?.name || eqFromCatalog?.name || rental?.equipment_name || rental?.equipment_title || 'Equipment';
 
-          // serializer gives equipment_id (string) read-only, but we also fallback
           const qrCode =
             rental?.equipment_id ||
+            rental?.equipment_code ||
             eqFromRental?.equipment_id ||
             eqFromCatalog?.equipment_id ||
-            rental?.equipment_code ||
             'N/A';
 
           const requestedAtRaw = rental?.rental_date || rental?.created_at || rental?.pickup_date || null;
@@ -222,12 +354,15 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
             qrCode,
             requestedAt,
             dueDate,
-            status: rental.status, // IMPORTANT: keep backend value ("Pending"/"Returned"/etc)
+            status: rental.status,
           };
         });
 
       setEquipmentList(mappedEquipment);
       setMyRentals(recent5);
+
+      // keep cart availability in sync after refresh
+      setTimeout(() => refreshCartAvailabilityFromCatalog(), 0);
     } catch (error) {
       console.error('Failed to fetch equipment', error);
     } finally {
@@ -235,6 +370,159 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     }
   };
 
+  // -------- CART HELPERS --------
+  const addToCart = (item: any) => {
+    const equipmentPk = Number(item.pk ?? item.id);
+    const equipmentCode = String(item.equipmentCode ?? item.qrCode ?? item.equipmentId ?? item.equipment_id ?? '').trim();
+    const available = Number(item.quantity_available ?? 0);
+
+    if (!Number.isFinite(equipmentPk) || equipmentPk <= 0 || !equipmentCode) {
+      alert('This equipment item is missing identifiers (pk/code). Please refresh.');
+      return;
+    }
+
+    // 🚫 prevent adding out-of-stock items
+    if (available <= 0) {
+      alert('This item is currently out of stock (Available: 0).');
+      return;
+    }
+
+    setCart((prev) => {
+      const existing = prev.find((x) => x.equipmentPk === equipmentPk);
+      if (existing) {
+        return prev.map((x) =>
+          x.equipmentPk === equipmentPk
+            ? { ...x, available, quantity: Math.min((Number(x.quantity) || 1) + 1, available) }
+            : x
+        );
+      }
+
+      return [
+        ...prev,
+        {
+          equipmentPk,
+          equipmentCode,
+          name: item.name,
+          image: item.image,
+          available,
+          quantity: 1,
+          durationDays: 1,
+          notes: '',
+          categoryText: item.category,
+        },
+      ];
+    });
+
+    setCartOpen(true);
+  };
+
+  const updateCartLine = (equipmentPk: number, patch: Partial<CartLine>) => {
+    setCart((prev) => prev.map((x) => (x.equipmentPk === equipmentPk ? { ...x, ...patch } : x)));
+  };
+
+  const removeFromCart = (equipmentPk: number) => {
+    setCart((prev) => prev.filter((x) => x.equipmentPk !== equipmentPk));
+  };
+
+  const clearCart = () => {
+    setCart([]);
+    setBundleNotes('');
+  };
+
+  const cartHasInvalidLines = useMemo(() => {
+    if (cart.length === 0) return false;
+    return cart.some((x) => {
+      const a = Number(x.available ?? 0);
+      const q = Number(x.quantity ?? 0);
+      if (a <= 0) return true;
+      if (!Number.isFinite(q) || q < 1) return true;
+      if (q > a) return true;
+      return false;
+    });
+  }, [cart]);
+
+  const extractDRFError = (err: any) => {
+    const data = err?.response?.data;
+    if (!data) return err?.message || 'Please check quantities and try again.';
+    if (typeof data === 'string') return data;
+    if (typeof data?.detail === 'string') return data.detail;
+    if (typeof data?.error === 'string') return data.error;
+    try {
+      return JSON.stringify(data);
+    } catch {
+      return 'Request failed. Please try again.';
+    }
+  };
+
+  /**
+   * ✅ UPDATED:
+   * Submit Bundle now behaves like "Rent Now":
+   * it calls equipmentService.checkout() for each cart item (and repeats for quantity).
+   *
+   * - checkout() expects equipment_id = CAM001 (equipment code), NOT PK
+   * - This creates rentals immediately (same as Rent Now)
+   */
+  const submitCartBundle = async () => {
+    if (cart.length === 0) return;
+
+    // ✅ resync from current catalog first
+    refreshCartAvailabilityFromCatalog();
+
+    const invalid = cart
+      .map((x) => {
+        const a = Number(availableByEquipmentCode.get(x.equipmentCode) ?? x.available ?? 0);
+        const q = Number(x.quantity ?? 0);
+        const problems: string[] = [];
+        if (a <= 0) problems.push('out of stock');
+        if (!Number.isFinite(q) || q < 1) problems.push('qty must be >= 1');
+        if (q > a) problems.push(`qty ${q} > available ${a}`);
+        return problems.length ? `${x.name} (${x.equipmentCode}): ${problems.join(', ')}` : null;
+      })
+      .filter(Boolean) as string[];
+
+    if (invalid.length > 0) {
+      alert('Submit blocked. Fix these items:\n\n' + invalid.join('\n'));
+      return;
+    }
+
+    setCartSubmitting(true);
+    try {
+      // build tasks: one checkout per unit (qty)
+      const tasks: Promise<any>[] = [];
+
+      for (const line of cart) {
+        const qty = Math.max(1, Number(line.quantity) || 1);
+
+        for (let i = 0; i < qty; i++) {
+          const note = (line.notes || '').trim() || (bundleNotes || '').trim() || '';
+
+          tasks.push(
+            equipmentService.checkout(
+              line.equipmentCode, // ✅ CAM001 (code) required by /equipment/checkout/
+              'Main Desk',
+              pickupDate,
+              line.durationDays,
+              note
+            )
+          );
+        }
+      }
+
+      await Promise.all(tasks);
+
+      alert('Bundle rented successfully!');
+      clearCart();
+      setCartOpen(false);
+      fetchData();
+    } catch (error: any) {
+      console.error('Bundle rent failed', error);
+      alert('Bundle rent failed: ' + extractDRFError(error));
+    } finally {
+      setCartSubmitting(false);
+    }
+  };
+
+  // -------- Existing single-rent modal helpers (kept) --------
   const openRentalModal = (item: any) => {
     setSelectedEquipment(item);
     setPickupDate(new Date().toISOString().split('T')[0]);
@@ -253,7 +541,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
 
   const toggleAccessory = (accName: string) => {
     if (selectedAccessories.includes(accName)) {
-      setSelectedAccessories(selectedAccessories.filter(a => a !== accName));
+      setSelectedAccessories(selectedAccessories.filter((a) => a !== accName));
     } else {
       setSelectedAccessories([...selectedAccessories, accName]);
     }
@@ -267,23 +555,31 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     { id: 'accessories', label: 'Accessories', icon: Film },
   ];
 
+  // ✅ UPDATED FILTER: use categorySlugs includes(selectedCategory)
   const filteredEquipment = equipmentList.filter((item) => {
-    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory =
-      selectedCategory === 'all' ||
-      (item.category && item.category.includes(selectedCategory));
+    const matchesSearch = safeLower(item?.name).includes(safeLower(searchQuery));
+
+    const slugs = Array.isArray(item?.categorySlugs) ? item.categorySlugs : extractCatSlugs(item);
+
+    const matchesCategory = selectedCategory === 'all' || slugs.includes(selectedCategory);
+
     return matchesSearch && matchesCategory;
   });
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'available': return 'bg-teal-500/20 text-teal-400 border-teal-500/50';
-      case 'rented': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
-      case 'maintenance': return 'bg-red-500/20 text-red-400 border-red-500/50';
-      default: return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
+      case 'available':
+        return 'bg-teal-500/20 text-teal-400 border-teal-500/50';
+      case 'rented':
+        return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
+      case 'maintenance':
+        return 'bg-red-500/20 text-red-400 border-red-500/50';
+      default:
+        return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
     }
   };
 
+  // Existing single-item checkout (kept)
   const handleRental = async () => {
     if (!selectedEquipment) return;
     setSubmitting(true);
@@ -292,13 +588,8 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     const fullNotes = `Additional Items: ${itemsList}. ${customAccessory ? 'Note: ' + customAccessory : ''}`;
 
     try {
-      await equipmentService.checkout(
-        selectedEquipment.qrCode,
-        'Main Desk',
-        pickupDate,
-        rentalDuration,
-        fullNotes
-      );
+      // backend checkout expects equipment_id code (CAM001) in your service checkout()
+      await equipmentService.checkout(selectedEquipment.qrCode, 'Main Desk', pickupDate, rentalDuration, fullNotes);
       alert(`Successfully rented ${selectedEquipment.name}`);
       setShowRentalModal(false);
       setSelectedEquipment(null);
@@ -321,11 +612,10 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     }
   };
 
-  // Cancel only when pending (like Lab Booking)
+  // Cancel only when pending
   const handleCancel = async (rentalId: number) => {
     if (!confirm('Cancel this request?')) return;
     try {
-      // If you don’t have this backend action yet, it will fail and you’ll see it in console.
       await equipmentService.cancelRental(rentalId);
       alert('Request cancelled.');
       fetchData();
@@ -353,7 +643,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
         </p>
       </div>
 
-      {/* Search and QR Scanner */}
+      {/* Search + Cart + QR Scanner */}
       <div className="flex gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
@@ -368,6 +658,28 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
             }`}
           />
         </div>
+
+        <Button
+          variant="outline"
+          className={`relative ${
+            theme === 'light'
+              ? 'bg-white border-gray-200 text-gray-900 hover:bg-gray-50'
+              : 'bg-gray-900 border-gray-700 text-white hover:bg-gray-800'
+          }`}
+          onClick={() => {
+            refreshCartAvailabilityFromCatalog();
+            setCartOpen(true);
+          }}
+        >
+          <ShoppingCart className="h-4 w-4 mr-2" />
+          Cart
+          {cartCount > 0 && (
+            <span className="ml-2 inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs bg-teal-500 text-white">
+              {cartCount}
+            </span>
+          )}
+        </Button>
+
         <Button
           className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
           onClick={() => setShowQRScanner(true)}
@@ -379,11 +691,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
 
       {/* Categories */}
       <Tabs value={selectedCategory} onValueChange={setSelectedCategory}>
-        <TabsList className={`border ${
-          theme === 'light'
-            ? 'bg-white border-gray-200'
-            : 'bg-gray-900/50 border-gray-800'
-        }`}>
+        <TabsList className={`border ${theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}`}>
           {categories.map((category) => {
             const Icon = category.icon;
             return (
@@ -404,74 +712,82 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
             {filteredEquipment.length === 0 ? (
               <p className="text-gray-500 col-span-4 text-center py-8">No equipment found.</p>
             ) : (
-              filteredEquipment.map((item) => (
-                <Card
-                  key={item.id}
-                  className={`hover:border-teal-500/50 transition-all group ${
-                    theme === 'light'
-                      ? 'bg-white border-gray-200'
-                      : 'bg-gray-900/50 border-gray-800'
-                  }`}
-                >
-                  <CardContent className="p-0">
-                    <div className="relative aspect-square overflow-hidden rounded-t-lg bg-gray-800">
-                      {item.image ? (
-                        <ImageWithFallback
-                          src={item.image}
-                          alt={item.name}
-                          className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-300"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-gray-600">
-                          <Camera className="h-12 w-12" />
+              filteredEquipment.map((item) => {
+                const available = Number(item.quantity_available ?? 0);
+                const imageUrl = resolveMediaUrl(item.image);
+
+                return (
+                  <Card
+                    key={item.id}
+                    className={`hover:border-teal-500/50 transition-all group ${
+                      theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'
+                    }`}
+                  >
+                    <CardContent className="p-0">
+                      <div className="relative aspect-square overflow-hidden rounded-t-lg bg-gray-800">
+                        {imageUrl ? (
+                          <ImageWithFallback
+                            src={imageUrl}
+                            alt={item.name}
+                            className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-300"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-gray-600">
+                            <Camera className="h-12 w-12" />
+                          </div>
+                        )}
+                        <Badge className={`absolute top-3 right-3 ${getStatusColor(item.status)}`}>{item.status}</Badge>
+                        <div className="absolute top-3 left-3 flex h-8 w-8 items-center justify-center rounded-lg bg-teal-500/20 border border-teal-500/30">
+                          <QrCode className="h-5 w-5 text-teal-400" />
                         </div>
-                      )}
-                      <Badge className={`absolute top-3 right-3 ${getStatusColor(item.status)}`}>
-                        {item.status}
-                      </Badge>
-                      <div className="absolute top-3 left-3 flex h-8 w-8 items-center justify-center rounded-lg bg-teal-500/20 border border-teal-500/30">
-                        <QrCode className="h-5 w-5 text-teal-400" />
-                      </div>
-                    </div>
-
-                    <div className="p-4 space-y-3">
-                      <div>
-                        <h4 className={theme === 'light' ? 'text-gray-900 mb-1' : 'text-white mb-1'}>{item.name}</h4>
-                        <p className={`text-xs mb-2 ${theme === 'light' ? 'text-gray-500' : 'text-gray-500'}`}>ID: {item.qrCode}</p>
-                        <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'} line-clamp-2`}>{item.specs}</p>
                       </div>
 
-                      <Button
-                        className={`w-full disabled:opacity-50 ${
-                          theme === 'light'
-                            ? 'bg-gray-100 text-gray-900 hover:bg-gray-200'
-                            : 'bg-gray-800 text-white hover:bg-gray-700'
-                        }`}
-                        disabled={item.status !== 'available'}
-                        onClick={() => openRentalModal(item)}
-                      >
-                        {item.status === 'available' ? (
-                          <>
+                      <div className="p-4 space-y-3">
+                        <div>
+                          <h4 className={theme === 'light' ? 'text-gray-900 mb-1' : 'text-white mb-1'}>{item.name}</h4>
+                          <p className={`text-xs mb-2 ${theme === 'light' ? 'text-gray-500' : 'text-gray-500'}`}>
+                            ID: {item.qrCode}
+                          </p>
+                          <p className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'} line-clamp-2`}>
+                            {item.specs}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-2">Available: {available}</p>
+                        </div>
+
+                        <div className="flex gap-3 mt-4">
+                          <Button
+                            className={`flex-1 disabled:opacity-50 ${
+                              theme === 'light'
+                                ? 'bg-gray-100 text-gray-900 hover:bg-gray-200'
+                                : 'bg-gray-800 text-white hover:bg-gray-700'
+                            }`}
+                            disabled={item.status !== 'available' || available <= 0}
+                            onClick={() => addToCart(item)}
+                          >
                             <Package className="h-4 w-4 mr-2" />
-                            Rent Equipment
-                          </>
-                        ) : item.status === 'rented' ? 'Currently Rented' : 'Under Maintenance'}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
+                            Add to Cart
+                          </Button>
+
+                          <Button
+                            className="flex-1 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white disabled:opacity-50"
+                            disabled={item.status !== 'available' || available <= 0}
+                            onClick={() => openRentalModal(item)}
+                          >
+                            Rent Now
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
             )}
           </div>
         </TabsContent>
       </Tabs>
 
-      {/* ✅ My Bookings (KEEP SAME STRUCTURE like Lab Booking card rows) */}
-      <Card className={`${
-        theme === 'light'
-          ? 'bg-white border-gray-200'
-          : 'bg-gray-900/50 border-gray-800'
-      }`}>
+      {/* ✅ My Bookings */}
+      <Card className={`${theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}`}>
         <CardHeader>
           <CardTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>My Bookings</CardTitle>
           <CardDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
@@ -495,9 +811,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
                   >
                     <div className="space-y-2">
                       <div className="flex items-center gap-3">
-                        <h4 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                          {rental.name}
-                        </h4>
+                        <h4 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{rental.name}</h4>
 
                         <Badge className={getRentalStatusColor(rental.status)}>
                           {getStatusIcon(rental.status)}
@@ -505,7 +819,11 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
                         </Badge>
                       </div>
 
-                      <div className={`flex flex-wrap items-center gap-3 text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                      <div
+                        className={`flex flex-wrap items-center gap-3 text-sm ${
+                          theme === 'light' ? 'text-gray-600' : 'text-gray-400'
+                        }`}
+                      >
                         <div className="flex items-center gap-1">
                           <QrCode className="h-4 w-4" />
                           <span>ID: {rental.qrCode}</span>
@@ -563,14 +881,147 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
         </CardContent>
       </Card>
 
-      {/* Rental Modal */}
+      {/* NEW: Cart Dialog */}
+      <Dialog open={cartOpen} onOpenChange={setCartOpen}>
+        <DialogContent className="max-w-2xl bg-gray-900 border-gray-800 text-white max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-white">Your Cart</DialogTitle>
+            <DialogDescription className="text-gray-400">
+              Submit all items as one bundle request (admin can approve items individually).
+            </DialogDescription>
+          </DialogHeader>
+
+          {cart.length === 0 ? (
+            <div className="text-sm text-gray-400 text-center py-10">Your cart is empty.</div>
+          ) : (
+            <div className="space-y-4">
+              {cart.map((line) => {
+                const available = Number(line.available ?? 0);
+                const maxQty = Math.max(0, available);
+                const outOfStock = available <= 0;
+                const imageUrl = resolveMediaUrl(line.image);
+
+                return (
+                  <div key={line.equipmentPk} className="p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex gap-3">
+                        <div className="h-16 w-16 rounded-lg overflow-hidden bg-gray-800 flex items-center justify-center">
+                          {imageUrl ? (
+                            <ImageWithFallback src={imageUrl} alt={line.name} className="object-cover w-full h-full" />
+                          ) : (
+                            <Camera className="h-6 w-6 text-gray-500" />
+                          )}
+                        </div>
+
+                        <div>
+                          <div className="text-white">{line.name}</div>
+                          <div className="text-xs text-gray-500">ID: {line.equipmentCode}</div>
+                          <div className="text-xs text-gray-500">Available: {available}</div>
+                          {outOfStock && <div className="text-xs text-red-400 mt-1">Out of stock — remove this item.</div>}
+                        </div>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                        onClick={() => removeFromCart(line.equipmentPk)}
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Remove
+                      </Button>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3 mt-4">
+                      <div className="space-y-2">
+                        <Label className="text-gray-300">Qty</Label>
+                        <Input
+                          type="number"
+                          min={outOfStock ? 0 : 1}
+                          max={maxQty}
+                          value={line.quantity}
+                          disabled={outOfStock}
+                          onChange={(e) => {
+                            const v = Number(e.target.value || (outOfStock ? 0 : 1));
+                            const next = outOfStock ? 0 : Math.max(1, Math.min(maxQty, v));
+                            updateCartLine(line.equipmentPk, { quantity: next });
+                          }}
+                          className="bg-gray-950 border-gray-700 text-white"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-gray-300">Duration (days)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={30}
+                          value={line.durationDays}
+                          onChange={(e) => {
+                            const v = Number(e.target.value || 1);
+                            updateCartLine(line.equipmentPk, { durationDays: Math.max(1, v) });
+                          }}
+                          className="bg-gray-950 border-gray-700 text-white"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-gray-300">Notes</Label>
+                        <Input
+                          placeholder="Optional"
+                          value={line.notes}
+                          onChange={(e) => updateCartLine(line.equipmentPk, { notes: e.target.value })}
+                          className="bg-gray-950 border-gray-700 text-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div className="space-y-2">
+                <Label className="text-gray-300">Bundle Notes (optional)</Label>
+                <Input
+                  placeholder="Anything admin should know..."
+                  value={bundleNotes}
+                  onChange={(e) => setBundleNotes(e.target.value)}
+                  className="bg-gray-950 border-gray-700 text-white"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <Button
+                  variant="outline"
+                  className="flex-1 border-gray-700 text-white hover:bg-gray-800"
+                  onClick={() => clearCart()}
+                  disabled={cartSubmitting}
+                >
+                  Clear Cart
+                </Button>
+
+                <Button
+                  className="flex-1 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+                  onClick={submitCartBundle}
+                  disabled={cartSubmitting || cartHasInvalidLines}
+                >
+                  {cartSubmitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : 'Submit Bundle'}
+                </Button>
+              </div>
+
+              <p className="text-xs text-gray-500">
+                Note: bundle approval happens per item. Approved items will appear in “My Bookings” after admin review.
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Rental Modal (kept) */}
       <Dialog open={showRentalModal} onOpenChange={setShowRentalModal}>
         <DialogContent className="max-w-md bg-gray-900 border-gray-800 text-white max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-white">Rent Equipment</DialogTitle>
-            <DialogDescription className="text-gray-400">
-              Submit a rental request for admin approval
-            </DialogDescription>
+            <DialogDescription className="text-gray-400">Submit a rental request for admin approval</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="p-4 rounded-lg bg-gray-800/50 border border-gray-700">
@@ -600,20 +1051,12 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
                     >
                       <div
                         className={`h-4 w-4 rounded border flex items-center justify-center ${
-                          selectedAccessories.includes(acc.name)
-                            ? 'bg-teal-500 border-teal-500'
-                            : 'border-gray-500'
+                          selectedAccessories.includes(acc.name) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
                         }`}
                       >
-                        {selectedAccessories.includes(acc.name) && (
-                          <CheckSquare className="h-3 w-3 text-white" />
-                        )}
+                        {selectedAccessories.includes(acc.name) && <CheckSquare className="h-3 w-3 text-white" />}
                       </div>
-                      <span
-                        className={`text-sm ${
-                          selectedAccessories.includes(acc.name) ? 'text-white' : 'text-gray-500'
-                        }`}
-                      >
+                      <span className={`text-sm ${selectedAccessories.includes(acc.name) ? 'text-white' : 'text-gray-500'}`}>
                         {acc.name} <span className="text-xs text-gray-600">({acc.status})</span>
                       </span>
                     </div>

@@ -82,13 +82,41 @@ const labBookingService = {
   },
 
   /**
-   * Cancel a booking
-   * NOTE: your backend does NOT define /cancel/ action in views.py
-   * so keep this only if you really created it elsewhere.
-   * If not, DO NOT call it from UI.
+   * Cancel a booking (student action)
+   * Backend: POST /lab-bookings/{id}/cancel/
+   * Only works if:
+   * - Student is owner of booking
+   * - Status is "pending"
    */
   cancel: async (id) => {
     const response = await api.post(`/lab-bookings/${id}/cancel/`);
+    return response.data;
+  },
+
+  /**
+   * Extend a booking (student action)
+   * Backend: POST /lab-bookings/{id}/extend/
+   * Body: { new_time_slot: "HH:MM-HH:MM" }
+   * Only works if:
+   * - Student is owner of booking
+   * - Status is "approved"
+   */
+  extend: async (id, newTimeSlot) => {
+    const response = await api.post(`/lab-bookings/${id}/extend/`, {
+      new_time_slot: newTimeSlot,
+    });
+    return response.data;
+  },
+
+  /**
+   * Checkout a booking (student action)
+   * Backend: POST /lab-bookings/{id}/checkout/
+   * Only works if:
+   * - Student is owner of booking
+   * - Status is "approved"
+   */
+  checkout: async (id) => {
+    const response = await api.post(`/lab-bookings/${id}/checkout/`);
     return response.data;
   },
 };

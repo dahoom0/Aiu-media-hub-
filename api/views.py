@@ -11,6 +11,7 @@ from django.http import HttpResponse
 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db.models import F, Q
+from django.db import transaction
 
 from datetime import timedelta, datetime, date
 import csv
@@ -34,6 +35,49 @@ class IsAdminUser(permissions.BasePermission):
                 or getattr(request.user, "user_type", "") == "admin"
             )
         )
+
+
+def _is_admin(user) -> bool:
+    return bool(user and user.is_authenticated and (user.is_staff or getattr(user, "user_type", "") == "admin"))
+
+
+def _get_equipment_available_units(equipment) -> int:
+    """
+    ✅ Stock rule: do NOT manually force quantity_available.
+    Prefer model-computed availability if present.
+    """
+    for attr in ("computed_available", "rentable_quantity", "quantity_available"):
+        try:
+            v = getattr(equipment, attr, None)
+            if v is None:
+                continue
+            return int(v)
+        except Exception:
+            continue
+    return 0
+
+
+def _equipment_sync(equipment):
+    """
+    ✅ Call model's internal sync logic by saving.
+    Never manually decrement/increment quantity_available.
+    """
+    try:
+        equipment.save()
+    except Exception:
+        # last resort: refresh then save (some implementations require fresh state)
+        try:
+            equipment.refresh_from_db()
+            equipment.save()
+        except Exception:
+            pass
+
+
+def _model_has_field(model_obj, field_name: str) -> bool:
+    try:
+        return any(f.name == field_name for f in model_obj._meta.get_fields())
+    except Exception:
+        return False
 
 
 # ---------------- AUTH VIEWS ---------------- #
@@ -153,7 +197,6 @@ def profile(request):
         sp.save()
     elif hasattr(user, "admin_profile"):
         ap = user.admin_profile
-        # ✅ your model field is role (not position)
         if "role" in data:
             ap.role = data.get("role") or ap.role
         if "department" in data:
@@ -196,7 +239,7 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = StudentProfile.objects.select_related("user")
 
-        if user.is_staff or getattr(user, "user_type", "") == "admin":
+        if _is_admin(user):
             return qs.all()
 
         return qs.filter(user=user)
@@ -305,9 +348,12 @@ class TutorialViewSet(viewsets.ModelViewSet):
                         )
                 except Exception:
                     pass
-                completed_str = completed_dt.astimezone(
-                    timezone.get_current_timezone()
-                ).strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    completed_str = completed_dt.astimezone(
+                        timezone.get_current_timezone()
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    completed_str = str(completed_dt)
             else:
                 completed_str = "N/A"
 
@@ -427,6 +473,42 @@ class LabViewSet(viewsets.ModelViewSet):
         s = re.sub(r"[^a-zA-Z0-9_\-]+", "_", s)
         return s[:60] or "lab"
 
+    def _status_display(self, booking_obj):
+        comment = (getattr(booking_obj, "admin_comment", "") or "").lower()
+        if "cancelled by student" in comment:
+            return "cancelled"
+        return (getattr(booking_obj, "status", "") or "").strip().lower() or ""
+
+    def _is_extended(self, booking_obj) -> str:
+        comment = (getattr(booking_obj, "admin_comment", "") or "").lower()
+        return "Yes" if ("extended by student" in comment or "extended:" in comment) else "No"
+
+    def _get_combined_status(self, booking_obj) -> str:
+        comment = (getattr(booking_obj, "admin_comment", "") or "").lower()
+
+        if "extended by student" in comment or "extended:" in comment:
+            return "Extended"
+
+        if "cancelled by student" in comment:
+            return "Cancelled"
+
+        status_v = (getattr(booking_obj, "status", "") or "").strip().lower()
+        if status_v == "approved":
+            return "Approved"
+        elif status_v == "completed":
+            return "Completed"
+        elif status_v == "rejected":
+            return "Rejected"
+        elif status_v == "pending":
+            return "Pending"
+        else:
+            return status_v.capitalize() if status_v else "Unknown"
+
+    def _checkout_time_from_comment(self, booking_obj) -> str:
+        comment = getattr(booking_obj, "admin_comment", "") or ""
+        m = re.search(r"CHECKOUT:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})", comment)
+        return m.group(1) if m else ""
+
     @action(detail=True, methods=["get"], url_path="availability", permission_classes=[IsAuthenticated])
     def availability(self, request, pk=None):
         lab = self.get_object()
@@ -521,11 +603,9 @@ class LabViewSet(viewsets.ModelViewSet):
             "Purpose",
             "Participants",
             "Admin Comment",
-            "Reviewed By",
-            "Reviewed At",
+            "Status",
+            "Check Out Time",
         ])
-
-        tz = timezone.get_current_timezone()
 
         for b in qs:
             student_user = getattr(b, "student", None)
@@ -557,18 +637,8 @@ class LabViewSet(viewsets.ModelViewSet):
                 except Exception:
                     pass
 
-            reviewed_by = getattr(b, "reviewed_by", None)
-            reviewed_by_username = getattr(reviewed_by, "username", "") or "N/A"
-
-            reviewed_at = ""
-            try:
-                if b.reviewed_at:
-                    ra = b.reviewed_at
-                    if timezone.is_naive(ra):
-                        ra = timezone.make_aware(ra, tz)
-                    reviewed_at = ra.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                reviewed_at = ""
+            combined_status = self._get_combined_status(b)
+            checkout_at = self._checkout_time_from_comment(b)
 
             writer.writerow([
                 b.id,
@@ -580,8 +650,8 @@ class LabViewSet(viewsets.ModelViewSet):
                 getattr(b, "purpose", "") or "",
                 getattr(b, "participants", "") or "",
                 getattr(b, "admin_comment", "") or "",
-                reviewed_by_username,
-                reviewed_at,
+                combined_status,
+                checkout_at,
             ])
 
         return response
@@ -609,6 +679,18 @@ class LabBookingViewSet(viewsets.ModelViewSet):
             return naive_dt
         tz = timezone.get_current_timezone()
         return timezone.make_aware(naive_dt, tz)
+
+    def _normalize_time_slot(self, time_slot: str):
+        try:
+            cleaned = str(time_slot or "").strip().replace(" ", "").replace("–", "-")
+            parts = cleaned.split("-")
+            if len(parts) != 2:
+                return None
+            start = parts[0].strip()[:5]
+            end = parts[1].strip()[:5]
+            return f"{start}-{end}"
+        except Exception:
+            return None
 
     def _auto_complete_qs(self, qs):
         now = timezone.now()
@@ -641,7 +723,7 @@ class LabBookingViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = LabBooking.objects.select_related("lab", "student").order_by("-created_at", "-id")
 
-        if user.is_staff or getattr(user, "user_type", "") == "admin":
+        if _is_admin(user):
             self._auto_complete_qs(qs)
             return qs
 
@@ -667,15 +749,8 @@ class LabBookingViewSet(viewsets.ModelViewSet):
         except Exception:
             return Response({"available_imacs": [], "detail": "Invalid date format"}, status=400)
 
-        try:
-            cleaned = time_slot.replace("–", "-")
-            parts = cleaned.split("-")
-            if len(parts) != 2:
-                raise ValueError("bad time_slot")
-            start = parts[0].strip()[:5]
-            end = parts[1].strip()[:5]
-            time_slot_norm = f"{start}-{end}"
-        except Exception:
+        time_slot_norm = self._normalize_time_slot(time_slot)
+        if not time_slot_norm:
             return Response({"available_imacs": [], "detail": "Invalid time_slot"}, status=400)
 
         booked = (
@@ -731,8 +806,309 @@ class LabBookingViewSet(viewsets.ModelViewSet):
         booking.save(update_fields=["status", "reviewed_by", "reviewed_at", "admin_comment", "updated_at"])
         return Response(self.get_serializer(booking).data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
+    def cancel(self, request, pk=None):
+        booking = self.get_object()
+
+        if booking.student_id != request.user.id:
+            return Response({"detail": "Not allowed."}, status=403)
+
+        current_status = (booking.status or "").strip().lower()
+        if current_status != "pending":
+            return Response({"detail": "Only pending bookings can be cancelled."}, status=400)
+
+        booking.status = "rejected"
+        stamp = timezone.now().astimezone(timezone.get_current_timezone()).strftime("%Y-%m-%d %H:%M:%S")
+        msg = f"Cancelled by student at {stamp}"
+
+        booking.admin_comment = (booking.admin_comment or "").strip()
+        booking.admin_comment = f"{booking.admin_comment}\n{msg}".strip() if booking.admin_comment else msg
+
+        booking.save(update_fields=["status", "admin_comment", "updated_at"])
+        return Response(self.get_serializer(booking).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
+    def extend(self, request, pk=None):
+        booking = self.get_object()
+
+        if booking.student_id != request.user.id:
+            return Response({"detail": "Not allowed."}, status=403)
+
+        current_status = (booking.status or "").strip().lower()
+        if current_status != "approved":
+            return Response({"detail": "Only approved bookings can be extended."}, status=400)
+
+        new_time_slot = request.data.get("new_time_slot") or request.data.get("time_slot") or ""
+        new_time_slot_norm = self._normalize_time_slot(new_time_slot)
+        if not new_time_slot_norm:
+            return Response({"detail": "new_time_slot is required (HH:MM-HH:MM)."}, status=400)
+
+        imac_no = getattr(booking, "imac_number", None)
+        if imac_no:
+            conflict = (
+                LabBooking.objects.filter(
+                    lab=booking.lab,
+                    booking_date=booking.booking_date,
+                    time_slot=new_time_slot_norm,
+                    imac_number=imac_no,
+                    status__in=["pending", "approved"],
+                )
+                .exclude(id=booking.id)
+                .exists()
+            )
+            if conflict:
+                return Response({"detail": f"iMac {imac_no} is not available for this new time slot."}, status=400)
+
+        old_slot = booking.time_slot or ""
+        booking.time_slot = new_time_slot_norm
+
+        stamp = timezone.now().astimezone(timezone.get_current_timezone()).strftime("%Y-%m-%d %H:%M:%S")
+        msg = f"EXTENDED: {old_slot} -> {new_time_slot_norm} (extended by student at {stamp})"
+
+        booking.admin_comment = (booking.admin_comment or "").strip()
+        booking.admin_comment = f"{booking.admin_comment}\n{msg}".strip() if booking.admin_comment else msg
+
+        booking.save(update_fields=["time_slot", "admin_comment", "updated_at"])
+        return Response(self.get_serializer(booking).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
+    def checkout(self, request, pk=None):
+        booking = self.get_object()
+
+        if booking.student_id != request.user.id:
+            return Response({"detail": "Not allowed."}, status=403)
+
+        current_status = (booking.status or "").strip().lower()
+        if current_status != "approved":
+            return Response({"detail": "Only approved bookings can be checked out."}, status=400)
+
+        now_local = timezone.now().astimezone(timezone.get_current_timezone()).strftime("%Y-%m-%d %H:%M:%S")
+
+        booking.status = "completed"
+        msg = f"CHECKOUT: {now_local}"
+
+        booking.admin_comment = (booking.admin_comment or "").strip()
+        booking.admin_comment = f"{booking.admin_comment}\n{msg}".strip() if booking.admin_comment else msg
+
+        booking.save(update_fields=["status", "admin_comment", "updated_at"])
+        return Response(self.get_serializer(booking).data, status=status.HTTP_200_OK)
+
 
 # --------------- EQUIPMENT LOGIC --------------- #
+
+class EquipmentCategoryViewSet(viewsets.ModelViewSet):
+    queryset = EquipmentCategory.objects.all()
+    serializer_class = EquipmentCategorySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        # list/retrieve for all logged-in
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        # create/update/delete only admin
+        return [IsAuthenticated(), IsAdminUser()]
+
+
+class EquipmentRequestViewSet(viewsets.ModelViewSet):
+    queryset = EquipmentRequest.objects.all()
+    serializer_class = EquipmentRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = EquipmentRequest.objects.select_related("student").prefetch_related(
+            "items", "items__equipment"
+        ).order_by("-created_at", "-id")
+
+        if _is_admin(user):
+            return qs
+
+        return qs.filter(student=user)
+
+    def _recalc_bundle_status(self, req_obj: EquipmentRequest) -> str:
+        if (req_obj.status or "").strip().lower() == "cancelled":
+            return req_obj.status
+
+        statuses = list(req_obj.items.values_list("status", flat=True))
+        if not statuses:
+            req_obj.status = "pending"
+            req_obj.save(update_fields=["status", "updated_at"])
+            return req_obj.status
+
+        statuses = [(s or "").strip().lower() for s in statuses]
+
+        if all(s == "pending" for s in statuses):
+            new_status = "pending"
+        elif all(s == "approved" for s in statuses):
+            new_status = "approved"
+        elif all(s == "rejected" for s in statuses):
+            new_status = "rejected"
+        elif all(s == "cancelled" for s in statuses):
+            # if everything cancelled, keep bundle cancelled for clarity
+            new_status = "cancelled"
+        else:
+            new_status = "partial"
+
+        if (req_obj.status or "").strip().lower() != new_status:
+            req_obj.status = new_status
+            req_obj.save(update_fields=["status", "updated_at"])
+
+        return req_obj.status
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
+    def cancel(self, request, pk=None):
+        req_obj = self.get_object()
+
+        if req_obj.student_id != request.user.id:
+            return Response({"detail": "Not allowed."}, status=403)
+
+        current = (req_obj.status or "").strip().lower()
+        if current not in ["pending", "partial"]:
+            return Response({"detail": "Only pending/partial requests can be cancelled."}, status=400)
+
+        with transaction.atomic():
+            req_obj.status = "cancelled"
+            req_obj.save(update_fields=["status", "updated_at"])
+
+            # cancel only pending items
+            EquipmentRequestItem.objects.filter(request=req_obj, status="pending").update(
+                status="cancelled",
+                updated_at=timezone.now()
+            )
+
+        req_obj.refresh_from_db()
+        return Response(self.get_serializer(req_obj).data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"items/(?P<item_id>[^/.]+)/approve",
+        permission_classes=[IsAuthenticated, IsAdminUser],
+    )
+    def approve_item(self, request, pk=None, item_id=None):
+        req_obj = self.get_object()
+
+        try:
+            item = EquipmentRequestItem.objects.select_related("equipment", "request").get(
+                id=item_id, request=req_obj
+            )
+        except EquipmentRequestItem.DoesNotExist:
+            return Response({"detail": "Item not found."}, status=404)
+
+        if (item.status or "").strip().lower() != "pending":
+            return Response({"detail": "Only pending items can be approved."}, status=400)
+
+        equipment = item.equipment
+
+        # quantity check
+        try:
+            needed = int(item.quantity or 0)
+        except Exception:
+            needed = 0
+        if needed < 1:
+            return Response({"detail": "Invalid quantity."}, status=400)
+
+        # ✅ Use model-computed availability (no manual quantity_available changes)
+        available_units = _get_equipment_available_units(equipment)
+        if available_units < needed:
+            return Response(
+                {"detail": f"Not enough quantity available for this item. Available: {available_units}, needed: {needed}"},
+                status=400
+            )
+
+        with transaction.atomic():
+            now = timezone.now()
+            try:
+                days = int(item.duration_days or 1)
+            except Exception:
+                days = 1
+            if days < 1:
+                days = 1
+
+            # Build rental kwargs safely (in case your model has/doesn't have certain fields)
+            rental_kwargs = dict(
+                equipment=equipment,
+                student=req_obj.student,
+                duration_days=days,
+                rental_date=now,
+                expected_return_date=now + timedelta(days=days),
+                status="approved",
+                notes=(item.notes or req_obj.notes or ""),
+                issued_by=request.user,
+                reviewed_by=request.user,
+                reviewed_at=now,
+            )
+            # Optional fields
+            if _model_has_field(EquipmentRental(), "reject_reason"):
+                rental_kwargs["reject_reason"] = None
+            if _model_has_field(EquipmentRental(), "quantity"):
+                rental_kwargs["quantity"] = needed
+            if _model_has_field(EquipmentRental(), "units"):
+                rental_kwargs["units"] = needed
+
+            rental = EquipmentRental.objects.create(**rental_kwargs)
+
+            # update item
+            item.status = "approved"
+            item.reviewed_by = request.user
+            item.reviewed_at = now
+            item.reject_reason = None
+            item.rental = rental
+            item.save(update_fields=["status", "reviewed_by", "reviewed_at", "reject_reason", "rental", "updated_at"])
+
+            # ✅ resync equipment using model logic
+            _equipment_sync(equipment)
+
+            # update bundle status
+            self._recalc_bundle_status(req_obj)
+
+            # update student stats
+            if hasattr(req_obj.student, "student_profile"):
+                try:
+                    count = EquipmentRental.objects.filter(student=req_obj.student, status="approved").count()
+                    StudentProfile.objects.filter(user=req_obj.student).update(active_rentals=count)
+                except Exception:
+                    pass
+
+        req_obj.refresh_from_db()
+        return Response(self.get_serializer(req_obj).data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"items/(?P<item_id>[^/.]+)/reject",
+        permission_classes=[IsAuthenticated, IsAdminUser],
+    )
+    def reject_item(self, request, pk=None, item_id=None):
+        req_obj = self.get_object()
+
+        try:
+            item = EquipmentRequestItem.objects.select_related("equipment", "request").get(
+                id=item_id, request=req_obj
+            )
+        except EquipmentRequestItem.DoesNotExist:
+            return Response({"detail": "Item not found."}, status=404)
+
+        if (item.status or "").strip().lower() != "pending":
+            return Response({"detail": "Only pending items can be rejected."}, status=400)
+
+        reason = request.data.get("reason") or request.data.get("reject_reason") or ""
+        reason = str(reason).strip() or "Rejected by admin"
+
+        now = timezone.now()
+
+        with transaction.atomic():
+            item.status = "rejected"
+            item.reviewed_by = request.user
+            item.reviewed_at = now
+            item.reject_reason = reason
+            item.save(update_fields=["status", "reviewed_by", "reviewed_at", "reject_reason", "updated_at"])
+
+            self._recalc_bundle_status(req_obj)
+
+        req_obj.refresh_from_db()
+        return Response(self.get_serializer(req_obj).data, status=status.HTTP_200_OK)
+
 
 class EquipmentViewSet(viewsets.ModelViewSet):
     queryset = Equipment.objects.all()
@@ -747,11 +1123,20 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         return s[:60] or "equipment"
 
     def _category_value(self, eq) -> str:
+        """
+        ✅ Your Equipment uses M2M `categories` (see serializer).
+        Export as comma-separated category names.
+        """
         try:
-            cat = getattr(eq, "category", None)
+            cats = list(eq.categories.all())
+            names = []
+            for c in cats:
+                nm = getattr(c, "name", None)
+                if nm and str(nm).strip():
+                    names.append(str(nm).strip())
+            return ", ".join(names)
         except Exception:
-            cat = None
-        return str(cat).strip() if cat is not None else ""
+            return ""
 
     @action(detail=False, methods=["get"], url_path="export", permission_classes=[IsAuthenticated, IsAdminUser])
     def export_equipment(self, request):
@@ -766,9 +1151,14 @@ class EquipmentViewSet(viewsets.ModelViewSet):
             "Equipment ID",
             "Name",
             "Description",
-            "Category",
+            "Categories",
             "Status",
+            "Quantity Total",
+            "Under Maintenance",
             "Quantity Available",
+            "Computed Available",
+            "Rentable Quantity",
+            "Rented Units",
         ])
 
         for e in qs:
@@ -778,20 +1168,30 @@ class EquipmentViewSet(viewsets.ModelViewSet):
                 getattr(e, "description", "") or "",
                 self._category_value(e),
                 getattr(e, "status", "") or "",
+                getattr(e, "quantity_total", "") if getattr(e, "quantity_total", None) is not None else "",
+                getattr(e, "quantity_under_maintenance", "") if getattr(e, "quantity_under_maintenance", None) is not None else "",
                 getattr(e, "quantity_available", "") if getattr(e, "quantity_available", None) is not None else "",
+                getattr(e, "computed_available", "") if getattr(e, "computed_available", None) is not None else "",
+                getattr(e, "rentable_quantity", "") if getattr(e, "rentable_quantity", None) is not None else "",
+                (e.rented_units() if hasattr(e, "rented_units") else ""),
             ])
 
         return response
 
     def perform_update(self, serializer):
+        """
+        ✅ Do NOT force quantity_available manually.
+        If status toggles to "available" by admin, we may optionally close open rentals (your original behavior),
+        then resync via equipment.save().
+        """
         user = self.request.user
-
         old_obj = self.get_object()
         old_status = (old_obj.status or "").strip().lower()
 
         updated = serializer.save()
         new_status = (updated.status or "").strip().lower()
 
+        # If admin sets equipment back to available, close open rentals (same as before)
         if new_status == "available" and old_status != "available":
             now = timezone.now()
 
@@ -817,17 +1217,8 @@ class EquipmentViewSet(viewsets.ModelViewSet):
                     except Exception:
                         pass
 
-            try:
-                qa = int(updated.quantity_available or 0)
-            except Exception:
-                qa = 0
-            if qa < 1:
-                updated.quantity_available = 1
-
-            try:
-                updated.save(update_fields=["quantity_available"])
-            except Exception:
-                pass
+        # ✅ resync equipment numbers using model logic
+        _equipment_sync(updated)
 
     @action(detail=False, methods=["post"])
     def checkout(self, request):
@@ -845,13 +1236,16 @@ class EquipmentViewSet(viewsets.ModelViewSet):
             duration = int(request.data.get("duration", 3))
         except Exception:
             duration = 3
+        if duration < 1:
+            duration = 1
 
         notes = request.data.get("notes", "")
 
-        if equipment.quantity_available < 1:
+        available_units = _get_equipment_available_units(equipment)
+        if available_units < 1:
             return Response({"error": "Item is currently out of stock"}, status=400)
 
-        rental = EquipmentRental.objects.create(
+        rental_kwargs = dict(
             student=request.user,
             equipment=equipment,
             rental_date=timezone.now(),
@@ -859,6 +1253,14 @@ class EquipmentViewSet(viewsets.ModelViewSet):
             status="pending",
             notes=notes,
         )
+        if _model_has_field(EquipmentRental(), "duration_days"):
+            rental_kwargs["duration_days"] = duration
+        if _model_has_field(EquipmentRental(), "quantity"):
+            rental_kwargs["quantity"] = 1
+        if _model_has_field(EquipmentRental(), "units"):
+            rental_kwargs["units"] = 1
+
+        rental = EquipmentRental.objects.create(**rental_kwargs)
 
         return Response(
             {
@@ -875,15 +1277,30 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def _auto_overdue_qs(self, qs):
+        """
+        ✅ Fast + safe auto-overdue.
+        Only marks approved/active rentals overdue when expected_return_date passed.
+        """
         now = timezone.now()
-        candidates = qs.exclude(expected_return_date__isnull=True)
-        for r in candidates:
-            s = (r.status or "").strip().lower()
-            if s not in ["approved", "active"]:
-                continue
-            if r.expected_return_date and r.expected_return_date < now:
-                r.status = "overdue"
-                r.save(update_fields=["status"])
+        try:
+            qs.filter(
+                expected_return_date__isnull=False,
+                expected_return_date__lt=now,
+                status__in=["approved", "active"],
+            ).update(status="overdue", updated_at=now if _model_has_field(EquipmentRental(), "updated_at") else None)
+        except Exception:
+            # fallback loop (in case model doesn't have updated_at or DB rejects None)
+            candidates = qs.exclude(expected_return_date__isnull=True)
+            for r in candidates:
+                s = (r.status or "").strip().lower()
+                if s not in ["approved", "active"]:
+                    continue
+                if r.expected_return_date and r.expected_return_date < now:
+                    r.status = "overdue"
+                    try:
+                        r.save(update_fields=["status", "updated_at"])
+                    except Exception:
+                        r.save(update_fields=["status"])
 
     def get_queryset(self):
         user = self.request.user
@@ -892,7 +1309,7 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
             .order_by("-rental_date", "-id")
         )
 
-        if user.is_staff or getattr(user, "user_type", "") == "admin":
+        if _is_admin(user):
             self._auto_overdue_qs(qs)
             return qs
 
@@ -1013,21 +1430,20 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Only pending requests can be approved."}, status=400)
 
         equipment = rental.equipment
-        if equipment.quantity_available < 1:
+        available_units = _get_equipment_available_units(equipment)
+        if available_units < 1:
             return Response({"detail": "Equipment is out of stock."}, status=400)
 
         rental.status = "approved"
         rental.issued_by = request.user
         rental.reviewed_by = request.user
         rental.reviewed_at = timezone.now()
-        rental.reject_reason = None
+        if hasattr(rental, "reject_reason"):
+            rental.reject_reason = None
         rental.save()
 
-        equipment.quantity_available -= 1
-        if equipment.quantity_available <= 0:
-            equipment.quantity_available = 0
-            equipment.status = "rented"
-        equipment.save()
+        # ✅ resync equipment using model logic (no manual decrement)
+        _equipment_sync(equipment)
 
         if hasattr(rental.student, "student_profile"):
             count = EquipmentRental.objects.filter(student=rental.student, status="approved").count()
@@ -1049,16 +1465,20 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         rental.status = "rejected"
         rental.reviewed_by = request.user
         rental.reviewed_at = timezone.now()
-        rental.reject_reason = reason
+        if hasattr(rental, "reject_reason"):
+            rental.reject_reason = reason
         rental.issued_by = None
         rental.save()
+
+        # no stock impact; keep in sync anyway (safe)
+        _equipment_sync(rental.equipment)
 
         return Response(self.get_serializer(rental).data)
 
     @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
     def cancel(self, request, pk=None):
         rental = self.get_object()
-        is_admin = request.user.is_staff or getattr(request.user, "user_type", "") == "admin"
+        is_admin = _is_admin(request.user)
         current_status = (rental.status or "").strip().lower()
 
         if not is_admin and rental.student_id != request.user.id:
@@ -1067,12 +1487,15 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         if current_status != "pending":
             return Response({"detail": "Only pending requests can be cancelled."}, status=400)
 
-        # ✅ Your model does NOT have "cancelled" in STATUS_CHOICES -> use rejected (safe)
         rental.status = "rejected"
         rental.reviewed_by = request.user if is_admin else None
         rental.reviewed_at = timezone.now()
-        rental.reject_reason = "Cancelled by user"
+        if hasattr(rental, "reject_reason"):
+            rental.reject_reason = "Cancelled by user"
         rental.save()
+
+        # no stock impact; keep in sync anyway (safe)
+        _equipment_sync(rental.equipment)
 
         return Response(self.get_serializer(rental).data)
 
@@ -1092,11 +1515,8 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         rental.returned_to = request.user
         rental.save()
 
-        equipment = rental.equipment
-        equipment.quantity_available += 1
-        if equipment.quantity_available > 0:
-            equipment.status = "available"
-        equipment.save()
+        # ✅ resync equipment using model logic (no manual increment)
+        _equipment_sync(rental.equipment)
 
         if hasattr(rental.student, "student_profile"):
             count = EquipmentRental.objects.filter(student=rental.student, status="approved").count()
@@ -1114,7 +1534,7 @@ class CVViewSet(viewsets.ModelViewSet):
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_queryset(self):
-        if self.request.user.is_staff or getattr(self.request.user, "user_type", "") == "admin":
+        if _is_admin(self.request.user):
             return CV.objects.all()
         return CV.objects.filter(student=self.request.user)
 
@@ -1487,9 +1907,7 @@ class CVViewSet(viewsets.ModelViewSet):
                     draw_bullet(val, font=italic_font, size=body_size, indent=16)
             y -= 2
 
-        # ✅ LEADERSHIP (FIXED): don’t drop records if organization is empty
-        # - If organization exists: group by organization
-        # - If organization missing but role exists: group under "LEADERSHIP"
+        # ✅ LEADERSHIP
         leadership_qs = Involvement.objects.filter(cv=cv).order_by("order", "-id")
         org_map = {}
 
@@ -1501,10 +1919,8 @@ class CVViewSet(viewsets.ModelViewSet):
             if not role and not org:
                 continue
 
-            # fallback org if missing: group under "LEADERSHIP"
             org_key = org if org else "LEADERSHIP"
 
-            # build a display line
             line = role if role else org
             if year and line:
                 line = f"{line} ({year})"
@@ -1557,9 +1973,8 @@ class CVViewSet(viewsets.ModelViewSet):
             y_right_end = draw_org_column(right_orgs, rx, y_right)
             y = min(y_left_end, y_right_end) - 2
 
-        # ✅ EXPERTISE (FIXED): support different Skill field names
+        # ✅ EXPERTISE (skills)
         def _skill_text(skill_obj):
-            # common possibilities without renaming models:
             for attr in ("name", "skill", "title", "label"):
                 try:
                     v = getattr(skill_obj, attr, None)
@@ -1575,14 +1990,12 @@ class CVViewSet(viewsets.ModelViewSet):
             raw = _skill_text(s)
             if not raw:
                 continue
-            # allow comma-separated skills stored in one record
             if "," in raw:
                 parts = [p.strip() for p in raw.split(",") if p.strip()]
                 skill_names.extend(parts)
             else:
                 skill_names.append(raw)
 
-        # de-dup while preserving order
         seen = set()
         clean_skills = []
         for s in skill_names:

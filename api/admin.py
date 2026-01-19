@@ -70,12 +70,28 @@ class LabBookingAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'updated_at', 'reviewed_at']
 
 # --------------------- EQUIPMENT --------------------- #
+# ✅ IMPORTANT: enable editing ManyToMany categories (Equipment.categories)
+# using the custom through model EquipmentCategoryMapping
+
+class EquipmentCategoryMappingInline(admin.TabularInline):
+    model = EquipmentCategoryMapping
+    extra = 1
+    autocomplete_fields = ['category']  # clean UX when you have many categories
+
+@admin.register(EquipmentCategory)
+class EquipmentCategoryAdmin(admin.ModelAdmin):
+    list_display = ['id', 'name', 'color', 'created_at']
+    search_fields = ['name']
+    ordering = ['name']
 
 @admin.register(Equipment)
 class EquipmentAdmin(admin.ModelAdmin):
     list_display = ['name', 'equipment_id', 'category', 'status', 'quantity_available', 'quantity_total', 'is_active']
     list_filter = ['category', 'status', 'is_active']
     search_fields = ['name', 'equipment_id']
+
+    # ✅ THIS is what adds multi-category UI in admin
+    inlines = [EquipmentCategoryMappingInline]
 
 @admin.register(EquipmentRental)
 class EquipmentRentalAdmin(admin.ModelAdmin):
