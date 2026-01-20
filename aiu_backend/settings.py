@@ -107,6 +107,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:3000",
     "http://172.16.112.91:5173",
+    "https://aiu-media-hub-production.up.railway.app",
     os.getenv("FRONTEND_URL", "").split(",")[0] if os.getenv("FRONTEND_URL") else None,  # Railway frontend
 ]
 CORS_ALLOWED_ORIGINS = [url for url in CORS_ALLOWED_ORIGINS if url]  # Remove None values
@@ -115,6 +116,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "172.16.125.71",
+    "aiu-media-hub-production.up.railway.app",
     os.getenv("RAILWAY_DOMAIN", ""),
     os.getenv("DOMAIN", ""),
 ]
