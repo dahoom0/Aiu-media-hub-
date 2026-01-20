@@ -12,7 +12,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-change-this-in-production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'False') == 'True'
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
+
+# Updated to include your specific network IP
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,172.16.112.91').split(',')
 
 # Application definition
 INSTALLED_APPS = [
@@ -31,7 +34,6 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # MUST BE AT THE TOP
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # For static files in production
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -60,45 +62,16 @@ TEMPLATES = [
 ]
 
 # Database
-import urllib.parse
-
-# Try to parse MYSQL_URL first (Railway provides this)
-MYSQL_URL = os.getenv("MYSQL_URL")
-
-if MYSQL_URL:
-    # Parse connection string: mysql://user:password@host:port/database
-    parsed = urllib.parse.urlparse(MYSQL_URL)
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.mysql",
-            "NAME": parsed.path.lstrip("/") or "aiu_mediahub",
-            "USER": parsed.username or "root",
-            "PASSWORD": parsed.password or "",
-            "HOST": parsed.hostname or "localhost",
-            "PORT": str(parsed.port) if parsed.port else "3306",
-            "OPTIONS": {
-                "charset": "utf8mb4",
-                "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
-            },
-        }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': os.getenv('DB_NAME'),
+        'USER': os.getenv('DB_USER'),
+        'PASSWORD': os.getenv('DB_PASSWORD'),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '3306'),
     }
-else:
-    # Fallback to individual environment variables
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.mysql",
-            "NAME": os.getenv("MYSQL_DATABASE", "aiu_mediahub"),
-            "USER": os.getenv("MYSQL_USER", "root"),
-            "PASSWORD": os.getenv("MYSQL_PASSWORD", ""),
-            "HOST": os.getenv("MYSQL_HOST", "localhost"),
-            "PORT": os.getenv("MYSQL_PORT", "3306"),
-            "OPTIONS": {
-                "charset": "utf8mb4",
-                "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
-            },
-        }
-    }
-
+}
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -120,31 +93,22 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# WhiteNoise static file storage (for production)
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS Settings - Production-ready
+# CORS Settings - Updated with your IP and common local ports
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "http://172.16.112.91:5173",
-    "https://aiu-media-hub-production.up.railway.app",
-    os.getenv("FRONTEND_URL", "").split(",")[0] if os.getenv("FRONTEND_URL") else None,  # Railway frontend
+    "http://172.16.112.91:5173", # Your frontend on the network
 ]
-CORS_ALLOWED_ORIGINS = [url for url in CORS_ALLOWED_ORIGINS if url]  # Remove None values
-
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
-    "172.16.125.71",
-    "aiu-media-hub-production.up.railway.app",
-    os.getenv("RAILWAY_DOMAIN", ""),
-    os.getenv("DOMAIN", ""),
+    ".railway.app",
+    ".onrender.com",  # <--- ADD THIS for Render
+    "*"               # Fallback
 ]
-ALLOWED_HOSTS = [host for host in ALLOWED_HOSTS if host]  # Remove empty strings
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -178,12 +142,3 @@ SIMPLE_JWT = {
 
 # Custom User Model
 AUTH_USER_MODEL = 'api.User'
-
-# Production Security Settings
-if not DEBUG:
-    SECURE_SSL_REDIRECT = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = 31536000
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True

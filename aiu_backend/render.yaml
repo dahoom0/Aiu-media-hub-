@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: aiu-mediahub-backend
+    env: python
+    region: singapore # Closest region to Malaysia for better latency
+    plan: free # Change to 'starter' if you need more RAM
+    
+    # The command to run when building the app
+    buildCommand: "pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate"
+    
+    # The command to start the server (Using Gunicorn)
+    startCommand: "gunicorn aiu_backend.wsgi:application"
+    
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.5 # Or match your local version
+      
+      - key: SECRET_KEY
+        generateValue: true # Render will generate a secure key for you
+      
+      - key: DEBUG
+        value: "False"
+        
+      - key: WEB_CONCURRENCY
+        value: "2" # Optimization for Gunicorn workers
+        
+      # You must paste your Railway MySQL URL here in the Render Dashboard
+      - key: DATABASE_URL
+        sync: false
