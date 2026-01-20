@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_DATABASE: aiu_mediahub
+      MYSQL_USER: aiu
+      MYSQL_PASSWORD: aiu123
+      MYSQL_ROOT_PASSWORD: root123
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+  backend:
+    build: ..
+    restart: always
+    command: bash -c "
+      until nc -z db 3306; do sleep 1; done &&
+      python manage.py migrate &&
+      gunicorn aiu_backend.wsgi:application --bind 0.0.0.0:8000
+    "
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: aiu_mediahub
+      MYSQL_USER: aiu
+      MYSQL_PASSWORD: aiu123
+      DJANGO_SETTINGS_MODULE: aiu_backend.settings
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  mysql_data:

@@ -34,6 +34,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # MUST BE AT THE TOP
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # For static files in production
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -63,15 +64,17 @@ TEMPLATES = [
 
 # Database
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '3306'),
+    "default": {
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": os.getenv("MYSQL_DATABASE"),
+        "USER": os.getenv("MYSQL_USER"),
+        "PASSWORD": os.getenv("MYSQL_PASSWORD"),
+        "HOST": os.getenv("MYSQL_HOST"),  # db
+        "PORT": os.getenv("MYSQL_PORT", "3306"),
+        "OPTIONS": {"charset": "utf8mb4"},
     }
 }
+
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -93,15 +96,29 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+# WhiteNoise static file storage (for production)
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS Settings - Updated with your IP and common local ports
+# CORS Settings - Production-ready
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "http://172.16.112.91:5173", # Your frontend on the network
+    "http://172.16.112.91:5173",
+    os.getenv("FRONTEND_URL", "").split(",")[0] if os.getenv("FRONTEND_URL") else None,  # Railway frontend
 ]
+CORS_ALLOWED_ORIGINS = [url for url in CORS_ALLOWED_ORIGINS if url]  # Remove None values
+
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "172.16.125.71",
+    os.getenv("RAILWAY_DOMAIN", ""),
+    os.getenv("DOMAIN", ""),
+]
+ALLOWED_HOSTS = [host for host in ALLOWED_HOSTS if host]  # Remove empty strings
 
 CORS_ALLOW_CREDENTIALS = True
 

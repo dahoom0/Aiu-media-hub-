@@ -1,0 +1,67 @@
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    restart: always
+    container_name: aiu_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-aiu_mediahub}
+      MYSQL_USER: ${MYSQL_USER:-aiu}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiu123}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: aiu_backend/Dockerfile
+    restart: always
+    container_name: aiu_backend
+    command: bash -c "
+      until nc -z db 3306; do echo 'Waiting for MySQL...'; sleep 1; done &&
+      python manage.py migrate &&
+      python manage.py collectstatic --noinput &&
+      gunicorn aiu_backend.wsgi:application --bind 0.0.0.0:8000
+    "
+    environment:
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-aiu_mediahub}
+      MYSQL_USER: ${MYSQL_USER:-aiu}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiu123}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-this-in-production}
+      DEBUG: ${DEBUG:-True}
+      DJANGO_SETTINGS_MODULE: aiu_backend.settings
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./media:/app/media
+      - ./staticfiles:/app/staticfiles
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+    container_name: aiu_frontend
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+
+volumes:
+  mysql_data:
+    driver: local
