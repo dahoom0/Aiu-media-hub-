@@ -60,17 +60,38 @@ TEMPLATES = [
 ]
 
 # Database
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": os.getenv("MYSQL_DATABASE"),
-        "USER": os.getenv("MYSQL_USER"),
-        "PASSWORD": os.getenv("MYSQL_PASSWORD"),
-        "HOST": os.getenv("MYSQL_HOST"),  # db
-        "PORT": os.getenv("MYSQL_PORT", "3306"),
-        "OPTIONS": {"charset": "utf8mb4"},
+import urllib.parse
+
+# Try to parse MYSQL_URL first (Railway provides this)
+MYSQL_URL = os.getenv("MYSQL_URL")
+
+if MYSQL_URL:
+    # Parse connection string: mysql://user:password@host:port/database
+    parsed = urllib.parse.urlparse(MYSQL_URL)
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": parsed.path.lstrip("/") or "aiu_mediahub",
+            "USER": parsed.username or "root",
+            "PASSWORD": parsed.password or "",
+            "HOST": parsed.hostname or "localhost",
+            "PORT": str(parsed.port) if parsed.port else "3306",
+            "OPTIONS": {"charset": "utf8mb4"},
+        }
     }
-}
+else:
+    # Fallback to individual environment variables
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": os.getenv("MYSQL_DATABASE", "aiu_mediahub"),
+            "USER": os.getenv("MYSQL_USER", "root"),
+            "PASSWORD": os.getenv("MYSQL_PASSWORD", ""),
+            "HOST": os.getenv("MYSQL_HOST", "localhost"),
+            "PORT": os.getenv("MYSQL_PORT", "3306"),
+            "OPTIONS": {"charset": "utf8mb4"},
+        }
+    }
 
 
 # Password validation
