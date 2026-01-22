@@ -93,11 +93,42 @@ const normalizeList = (data) => {
   return [];
 };
 
+// ✅ NEW: fetch all pages when DRF pagination is enabled
+const fetchAllEquipment = async () => {
+  const allRaw = [];
+
+  // start with first page
+  let nextUrl = '/equipment/';
+
+  while (nextUrl) {
+    const res = await api.get(nextUrl);
+    const data = res.data;
+
+    // Paginated shape: { count, next, previous, results }
+    if (data && Array.isArray(data.results)) {
+      allRaw.push(...data.results);
+      nextUrl = data.next; // can be null, absolute URL, or relative URL
+      continue;
+    }
+
+    // Non-paginated shape: [ ... ]
+    if (Array.isArray(data)) {
+      allRaw.push(...data);
+      nextUrl = null;
+      continue;
+    }
+
+    // Unknown shape: stop safely
+    nextUrl = null;
+  }
+
+  return allRaw.map(toUI).filter(Boolean);
+};
+
 const equipmentService = {
-  // ✅ catalog
+  // ✅ catalog (now returns ALL items, not only first page)
   getAll: async () => {
-    const response = await api.get('/equipment/');
-    return normalizeList(response.data);
+    return await fetchAllEquipment();
   },
 
   // ✅ single checkout (your backend expects the CODE here, e.g. CAM001)

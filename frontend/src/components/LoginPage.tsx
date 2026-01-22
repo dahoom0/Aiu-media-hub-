@@ -143,9 +143,22 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="student-password" className="text-gray-300">
-                      Password
-                    </Label>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="student-password" className="text-gray-300">
+                        Password
+                      </Label>
+
+                      {/* ✅ NEW: Forgot password button (Student tab only) */}
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('forgot-password')}
+                        className="text-xs text-teal-400 hover:text-teal-300 transition-colors"
+                        disabled={loading}
+                      >
+                        Forgot password?
+                      </button>
+                    </div>
+
                     <Input
                       id="student-password"
                       type="password"
@@ -179,6 +192,7 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
                       type="button"
                       onClick={() => onNavigate('signup')}
                       className="text-teal-400 hover:text-teal-300 transition-colors"
+                      disabled={loading}
                     >
                       Create Account
                     </button>

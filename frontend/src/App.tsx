@@ -17,6 +17,8 @@ import { AdminEquipmentManagement } from './components/AdminEquipmentManagement'
 import { AdminCVReview } from './components/AdminCVReview';
 import { AdminProfileManagement } from './components/AdminProfileManagement';
 import { StudentCVView } from './components/StudentCVView';
+import { ForgotPasswordPage } from './components/ForgotPasswordPage';
+import { ResetPasswordPage } from './components/ResetPasswordPage';
 import { Toaster } from './components/ui/sonner';
 import { ThemeProvider } from './components/ThemeProvider';
 import authService from './services/authService';
@@ -25,6 +27,8 @@ type PageType =
   | 'landing'
   | 'login'
   | 'signup'
+  | 'forgot-password'
+  | 'reset-password'
   | 'student-dashboard'
   | 'admin-dashboard'
   | 'tutorials'
@@ -43,18 +47,37 @@ type PageType =
 
 function isAdminUser(user: any): boolean {
   if (!user) return false;
-
-  // preferred: backend field
   if (user.user_type && String(user.user_type).toLowerCase() === 'admin') return true;
-
-  // common django field
   if (user.is_staff === true) return true;
-
-  // your current stored user uses "role"
   const role = String(user.role || '').toLowerCase();
   if (role.includes('admin')) return true;
-
   return false;
+}
+
+function isValidPageType(p: string): p is PageType {
+  const allowed: PageType[] = [
+    'landing',
+    'login',
+    'signup',
+    'forgot-password',
+    'reset-password',
+    'student-dashboard',
+    'admin-dashboard',
+    'tutorials',
+    'lab-booking',
+    'equipment-rental',
+    'cv-generator',
+    'profile',
+    'change-password',
+    'settings',
+    'admin-tutorials',
+    'admin-labs',
+    'admin-equipment',
+    'admin-cv-review',
+    'admin-profiles',
+    'student-cv-view',
+  ];
+  return allowed.includes(p as PageType);
 }
 
 export default function App() {
@@ -63,9 +86,40 @@ export default function App() {
   const [navigationParams, setNavigationParams] = useState<any>({});
   const [isLoading, setIsLoading] = useState(true);
 
-  // Check Login Status on App Load
   useEffect(() => {
+    const applyDeepLink = () => {
+      const qs = new URLSearchParams(window.location.search);
+
+      const page = (qs.get('page') || '').trim();
+      const uid = (qs.get('uid') || '').trim();
+      const token = (qs.get('token') || '').trim();
+
+      // Only allow deep-linking to reset-password (safe)
+      if (page === 'reset-password' && uid && token) {
+        setCurrentPage('reset-password');
+        setNavigationParams({ uid, token });
+
+        // ✅ Strip query string immediately (your architecture rule)
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return true;
+      }
+
+      // Strip unknown junk query strings to keep app clean
+      if (window.location.search) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+
+      return false;
+    };
+
     const checkLogin = () => {
+      // Deep link has priority (user might not be logged in)
+      const deepLinked = applyDeepLink();
+      if (deepLinked) {
+        setIsLoading(false);
+        return;
+      }
+
       if (authService.isAuthenticated()) {
         const user = authService.getUser();
         const admin = isAdminUser(user);
@@ -73,6 +127,7 @@ export default function App() {
         setIsAdmin(admin);
         setCurrentPage(admin ? 'admin-dashboard' : 'student-dashboard');
       }
+
       setIsLoading(false);
     };
 
@@ -80,28 +135,40 @@ export default function App() {
   }, []);
 
   const handleNavigate = (page: string, params?: any) => {
+    const clean = String(page || '').split('?')[0]; // ✅ strip accidental query strings
+    if (!isValidPageType(clean)) {
+      setCurrentPage('landing');
+      setNavigationParams({});
+      return;
+    }
+
     const user = authService.getUser();
     const admin = isAdminUser(user);
 
-    // Guard: admin should never go to student dashboard
-    if (admin && page === 'student-dashboard') {
+    // Allow auth pages regardless of role
+    if (clean === 'landing' || clean === 'login' || clean === 'signup' || clean === 'forgot-password' || clean === 'reset-password') {
+      setIsAdmin(admin);
+      setCurrentPage(clean);
+      setNavigationParams(params || {});
+      return;
+    }
+
+    if (admin && clean === 'student-dashboard') {
       setIsAdmin(true);
       setCurrentPage('admin-dashboard');
       setNavigationParams(params || {});
       return;
     }
 
-    // Guard: student should never go to admin pages
-    if (!admin && page.startsWith('admin-')) {
+    if (!admin && clean.startsWith('admin-')) {
       setIsAdmin(false);
       setCurrentPage('student-dashboard');
       setNavigationParams(params || {});
       return;
     }
 
-    // Normal navigation
     setIsAdmin(admin);
-    setCurrentPage(page as PageType);
+    setCurrentPage(clean);
     setNavigationParams(params || {});
   };
 
@@ -116,24 +183,28 @@ export default function App() {
       case 'signup':
         return <SignupPage onNavigate={handleNavigate} />;
 
+      case 'forgot-password':
+        return <ForgotPasswordPage onNavigate={handleNavigate} />;
+
+      case 'reset-password':
+        return (
+          <ResetPasswordPage
+            onNavigate={handleNavigate}
+            uid={navigationParams?.uid}
+            token={navigationParams?.token}
+          />
+        );
+
       case 'student-dashboard':
         return (
-          <DashboardLayout
-            activePage="student-dashboard"
-            onNavigate={handleNavigate}
-            isAdmin={isAdmin}
-          >
+          <DashboardLayout activePage="student-dashboard" onNavigate={handleNavigate} isAdmin={isAdmin}>
             <StudentDashboard onNavigate={handleNavigate} />
           </DashboardLayout>
         );
 
       case 'admin-dashboard':
         return (
-          <DashboardLayout
-            activePage="admin-dashboard"
-            onNavigate={handleNavigate}
-            isAdmin={true}
-          >
+          <DashboardLayout activePage="admin-dashboard" onNavigate={handleNavigate} isAdmin={true}>
             <AdminDashboard onNavigate={handleNavigate} />
           </DashboardLayout>
         );
@@ -154,11 +225,7 @@ export default function App() {
 
       case 'equipment-rental':
         return (
-          <DashboardLayout
-            activePage="equipment-rental"
-            onNavigate={handleNavigate}
-            isAdmin={isAdmin}
-          >
+          <DashboardLayout activePage="equipment-rental" onNavigate={handleNavigate} isAdmin={isAdmin}>
             <EquipmentRentalPage onNavigate={handleNavigate} />
           </DashboardLayout>
         );

@@ -100,15 +100,11 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "http://172.16.112.91:5173", # Your frontend on the network
+    "http://172.16.125.71:5173",  # LAN frontend (CURRENT IP)
 ]
-ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    ".railway.app",
-    ".onrender.com",  # <--- ADD THIS for Render
-    "*"               # Fallback
-]
+
+ALLOWED_HOSTS = ["*"]
+
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -139,6 +135,52 @@ SIMPLE_JWT = {
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
 }
+
+
+
+
+# ---------------- EMAIL (OTP) ----------------
+
+# Set EMAIL_MODE=console in .env to force this
+EMAIL_MODE = os.getenv("EMAIL_MODE", "console").lower().strip()
+
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "20"))
+
+if EMAIL_MODE == "smtp":
+    # REAL EMAIL SENDING (use .env)
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+    EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+
+    EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
+    EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False") == "True"
+
+    EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+
+    DEFAULT_FROM_EMAIL = os.getenv(
+        "DEFAULT_FROM_EMAIL",
+        EMAIL_HOST_USER or "no-reply@aiu-media-hub.local"
+    )
+
+    # Avoid hanging when SMTP is slow
+    EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "20"))
+
+else:
+    # CONSOLE BACKEND (shows OTP in your runserver console)
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+    DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@aiu-media-hub.local")
+
+
+# ---- OTP CONFIG (DB-backed) ----
+OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))          # 5 min
+OTP_RESEND_COOLDOWN = int(os.getenv("OTP_RESEND_COOLDOWN", "60"))   # 60 sec
+OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))          # attempts before invalidation
+
+
+
+
+
 
 # Custom User Model
 AUTH_USER_MODEL = 'api.User'

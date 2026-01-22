@@ -8,6 +8,8 @@ from io import BytesIO
 from django.core.files import File
 from PIL import Image
 
+from django.utils import timezone
+
 
 class User(AbstractUser):
     """Extended User model for both students and admins"""
@@ -28,6 +30,47 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.get_full_name()} ({self.username})"
+
+
+# ===================== NEW: PASSWORD RESET OTP =====================
+
+class PasswordResetOTP(models.Model):
+    """
+    Stores OTPs for password reset.
+    - email is stored for lookup (case-insensitive searches use iexact in queries)
+    - otp_hash uses Django password hashing (make_password/check_password)
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='password_reset_otps',
+        null=True,
+        blank=True
+    )
+    email = models.EmailField(db_index=True)
+    otp_hash = models.CharField(max_length=255)
+    expires_at = models.DateTimeField()
+    used = models.BooleanField(default=False)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'password_reset_otps'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['email', 'used']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    def __str__(self):
+        return f"PasswordResetOTP({self.email}, used={self.used}, expires_at={self.expires_at})"
+
+    @property
+    def is_expired(self) -> bool:
+        try:
+            return timezone.now() >= self.expires_at
+        except Exception:
+            return True
 
 
 class StudentProfile(models.Model):

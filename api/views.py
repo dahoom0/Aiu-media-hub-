@@ -38,7 +38,23 @@ class IsAdminUser(permissions.BasePermission):
 
 
 def _is_admin(user) -> bool:
-    return bool(user and user.is_authenticated and (user.is_staff or getattr(user, "user_type", "") == "admin"))
+    return bool(
+        user
+        and user.is_authenticated
+        and (user.is_staff or getattr(user, "user_type", "") == "admin")
+    )
+
+
+def _model_has_field(model_or_cls, field_name: str) -> bool:
+    """
+    Safe field-exists check that works with either a model class or instance.
+    Avoids instantiating models that may require constructor args.
+    """
+    try:
+        cls = model_or_cls if isinstance(model_or_cls, type) else model_or_cls.__class__
+        return any(f.name == field_name for f in cls._meta.get_fields())
+    except Exception:
+        return False
 
 
 def _get_equipment_available_units(equipment) -> int:
@@ -65,19 +81,11 @@ def _equipment_sync(equipment):
     try:
         equipment.save()
     except Exception:
-        # last resort: refresh then save (some implementations require fresh state)
         try:
             equipment.refresh_from_db()
             equipment.save()
         except Exception:
             pass
-
-
-def _model_has_field(model_obj, field_name: str) -> bool:
-    try:
-        return any(f.name == field_name for f in model_obj._meta.get_fields())
-    except Exception:
-        return False
 
 
 # ---------------- AUTH VIEWS ---------------- #
@@ -473,22 +481,11 @@ class LabViewSet(viewsets.ModelViewSet):
         s = re.sub(r"[^a-zA-Z0-9_\-]+", "_", s)
         return s[:60] or "lab"
 
-    def _status_display(self, booking_obj):
-        comment = (getattr(booking_obj, "admin_comment", "") or "").lower()
-        if "cancelled by student" in comment:
-            return "cancelled"
-        return (getattr(booking_obj, "status", "") or "").strip().lower() or ""
-
-    def _is_extended(self, booking_obj) -> str:
-        comment = (getattr(booking_obj, "admin_comment", "") or "").lower()
-        return "Yes" if ("extended by student" in comment or "extended:" in comment) else "No"
-
     def _get_combined_status(self, booking_obj) -> str:
         comment = (getattr(booking_obj, "admin_comment", "") or "").lower()
 
         if "extended by student" in comment or "extended:" in comment:
             return "Extended"
-
         if "cancelled by student" in comment:
             return "Cancelled"
 
@@ -506,7 +503,10 @@ class LabViewSet(viewsets.ModelViewSet):
 
     def _checkout_time_from_comment(self, booking_obj) -> str:
         comment = getattr(booking_obj, "admin_comment", "") or ""
-        m = re.search(r"CHECKOUT:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})", comment)
+        m = re.search(
+            r"CHECKOUT:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})",
+            comment,
+        )
         return m.group(1) if m else ""
 
     @action(detail=True, methods=["get"], url_path="availability", permission_classes=[IsAuthenticated])
@@ -902,10 +902,8 @@ class EquipmentCategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
-        # list/retrieve for all logged-in
         if self.action in ["list", "retrieve"]:
             return [IsAuthenticated()]
-        # create/update/delete only admin
         return [IsAuthenticated(), IsAdminUser()]
 
 
@@ -944,7 +942,6 @@ class EquipmentRequestViewSet(viewsets.ModelViewSet):
         elif all(s == "rejected" for s in statuses):
             new_status = "rejected"
         elif all(s == "cancelled" for s in statuses):
-            # if everything cancelled, keep bundle cancelled for clarity
             new_status = "cancelled"
         else:
             new_status = "partial"
@@ -970,7 +967,6 @@ class EquipmentRequestViewSet(viewsets.ModelViewSet):
             req_obj.status = "cancelled"
             req_obj.save(update_fields=["status", "updated_at"])
 
-            # cancel only pending items
             EquipmentRequestItem.objects.filter(request=req_obj, status="pending").update(
                 status="cancelled",
                 updated_at=timezone.now()
@@ -1000,7 +996,6 @@ class EquipmentRequestViewSet(viewsets.ModelViewSet):
 
         equipment = item.equipment
 
-        # quantity check
         try:
             needed = int(item.quantity or 0)
         except Exception:
@@ -1008,7 +1003,6 @@ class EquipmentRequestViewSet(viewsets.ModelViewSet):
         if needed < 1:
             return Response({"detail": "Invalid quantity."}, status=400)
 
-        # ✅ Use model-computed availability (no manual quantity_available changes)
         available_units = _get_equipment_available_units(equipment)
         if available_units < needed:
             return Response(
@@ -1025,7 +1019,6 @@ class EquipmentRequestViewSet(viewsets.ModelViewSet):
             if days < 1:
                 days = 1
 
-            # Build rental kwargs safely (in case your model has/doesn't have certain fields)
             rental_kwargs = dict(
                 equipment=equipment,
                 student=req_obj.student,
@@ -1038,31 +1031,30 @@ class EquipmentRequestViewSet(viewsets.ModelViewSet):
                 reviewed_by=request.user,
                 reviewed_at=now,
             )
-            # Optional fields
-            if _model_has_field(EquipmentRental(), "reject_reason"):
+
+            if _model_has_field(EquipmentRental, "reject_reason"):
                 rental_kwargs["reject_reason"] = None
-            if _model_has_field(EquipmentRental(), "quantity"):
+            if _model_has_field(EquipmentRental, "quantity"):
                 rental_kwargs["quantity"] = needed
-            if _model_has_field(EquipmentRental(), "units"):
+            if _model_has_field(EquipmentRental, "units"):
                 rental_kwargs["units"] = needed
 
             rental = EquipmentRental.objects.create(**rental_kwargs)
 
-            # update item
             item.status = "approved"
             item.reviewed_by = request.user
             item.reviewed_at = now
-            item.reject_reason = None
-            item.rental = rental
-            item.save(update_fields=["status", "reviewed_by", "reviewed_at", "reject_reason", "rental", "updated_at"])
+            if _model_has_field(EquipmentRequestItem, "reject_reason"):
+                item.reject_reason = None
+            if _model_has_field(EquipmentRequestItem, "rental"):
+                item.rental = rental
+                item.save(update_fields=["status", "reviewed_by", "reviewed_at", "reject_reason", "rental", "updated_at"])
+            else:
+                item.save(update_fields=["status", "reviewed_by", "reviewed_at", "reject_reason", "updated_at"])
 
-            # ✅ resync equipment using model logic
             _equipment_sync(equipment)
-
-            # update bundle status
             self._recalc_bundle_status(req_obj)
 
-            # update student stats
             if hasattr(req_obj.student, "student_profile"):
                 try:
                     count = EquipmentRental.objects.filter(student=req_obj.student, status="approved").count()
@@ -1101,8 +1093,11 @@ class EquipmentRequestViewSet(viewsets.ModelViewSet):
             item.status = "rejected"
             item.reviewed_by = request.user
             item.reviewed_at = now
-            item.reject_reason = reason
-            item.save(update_fields=["status", "reviewed_by", "reviewed_at", "reject_reason", "updated_at"])
+            if _model_has_field(EquipmentRequestItem, "reject_reason"):
+                item.reject_reason = reason
+                item.save(update_fields=["status", "reviewed_by", "reviewed_at", "reject_reason", "updated_at"])
+            else:
+                item.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
 
             self._recalc_bundle_status(req_obj)
 
@@ -1181,7 +1176,7 @@ class EquipmentViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """
         ✅ Do NOT force quantity_available manually.
-        If status toggles to "available" by admin, we may optionally close open rentals (your original behavior),
+        If status toggles to "available" by admin, close open rentals (same as before),
         then resync via equipment.save().
         """
         user = self.request.user
@@ -1191,7 +1186,6 @@ class EquipmentViewSet(viewsets.ModelViewSet):
         updated = serializer.save()
         new_status = (updated.status or "").strip().lower()
 
-        # If admin sets equipment back to available, close open rentals (same as before)
         if new_status == "available" and old_status != "available":
             now = timezone.now()
 
@@ -1206,7 +1200,10 @@ class EquipmentViewSet(viewsets.ModelViewSet):
                     r.status = "returned"
                     r.actual_return_date = now
                     r.returned_to = user
-                    r.save(update_fields=["status", "actual_return_date", "returned_to", "updated_at"])
+                    if _model_has_field(EquipmentRental, "updated_at"):
+                        r.save(update_fields=["status", "actual_return_date", "returned_to", "updated_at"])
+                    else:
+                        r.save(update_fields=["status", "actual_return_date", "returned_to"])
                 except Exception:
                     continue
 
@@ -1217,7 +1214,6 @@ class EquipmentViewSet(viewsets.ModelViewSet):
                     except Exception:
                         pass
 
-        # ✅ resync equipment numbers using model logic
         _equipment_sync(updated)
 
     @action(detail=False, methods=["post"])
@@ -1253,11 +1249,11 @@ class EquipmentViewSet(viewsets.ModelViewSet):
             status="pending",
             notes=notes,
         )
-        if _model_has_field(EquipmentRental(), "duration_days"):
+        if _model_has_field(EquipmentRental, "duration_days"):
             rental_kwargs["duration_days"] = duration
-        if _model_has_field(EquipmentRental(), "quantity"):
+        if _model_has_field(EquipmentRental, "quantity"):
             rental_kwargs["quantity"] = 1
-        if _model_has_field(EquipmentRental(), "units"):
+        if _model_has_field(EquipmentRental, "units"):
             rental_kwargs["units"] = 1
 
         rental = EquipmentRental.objects.create(**rental_kwargs)
@@ -1283,13 +1279,19 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         """
         now = timezone.now()
         try:
-            qs.filter(
-                expected_return_date__isnull=False,
-                expected_return_date__lt=now,
-                status__in=["approved", "active"],
-            ).update(status="overdue", updated_at=now if _model_has_field(EquipmentRental(), "updated_at") else None)
+            if _model_has_field(EquipmentRental, "updated_at"):
+                qs.filter(
+                    expected_return_date__isnull=False,
+                    expected_return_date__lt=now,
+                    status__in=["approved", "active"],
+                ).update(status="overdue", updated_at=now)
+            else:
+                qs.filter(
+                    expected_return_date__isnull=False,
+                    expected_return_date__lt=now,
+                    status__in=["approved", "active"],
+                ).update(status="overdue")
         except Exception:
-            # fallback loop (in case model doesn't have updated_at or DB rejects None)
             candidates = qs.exclude(expected_return_date__isnull=True)
             for r in candidates:
                 s = (r.status or "").strip().lower()
@@ -1298,9 +1300,15 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
                 if r.expected_return_date and r.expected_return_date < now:
                     r.status = "overdue"
                     try:
-                        r.save(update_fields=["status", "updated_at"])
+                        if _model_has_field(EquipmentRental, "updated_at"):
+                            r.save(update_fields=["status", "updated_at"])
+                        else:
+                            r.save(update_fields=["status"])
                     except Exception:
-                        r.save(update_fields=["status"])
+                        try:
+                            r.save(update_fields=["status"])
+                        except Exception:
+                            pass
 
     def get_queryset(self):
         user = self.request.user
@@ -1438,11 +1446,10 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         rental.issued_by = request.user
         rental.reviewed_by = request.user
         rental.reviewed_at = timezone.now()
-        if hasattr(rental, "reject_reason"):
+        if _model_has_field(EquipmentRental, "reject_reason"):
             rental.reject_reason = None
         rental.save()
 
-        # ✅ resync equipment using model logic (no manual decrement)
         _equipment_sync(equipment)
 
         if hasattr(rental.student, "student_profile"):
@@ -1465,12 +1472,11 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         rental.status = "rejected"
         rental.reviewed_by = request.user
         rental.reviewed_at = timezone.now()
-        if hasattr(rental, "reject_reason"):
+        if _model_has_field(EquipmentRental, "reject_reason"):
             rental.reject_reason = reason
         rental.issued_by = None
         rental.save()
 
-        # no stock impact; keep in sync anyway (safe)
         _equipment_sync(rental.equipment)
 
         return Response(self.get_serializer(rental).data)
@@ -1490,11 +1496,10 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         rental.status = "rejected"
         rental.reviewed_by = request.user if is_admin else None
         rental.reviewed_at = timezone.now()
-        if hasattr(rental, "reject_reason"):
+        if _model_has_field(EquipmentRental, "reject_reason"):
             rental.reject_reason = "Cancelled by user"
         rental.save()
 
-        # no stock impact; keep in sync anyway (safe)
         _equipment_sync(rental.equipment)
 
         return Response(self.get_serializer(rental).data)
@@ -1515,7 +1520,6 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         rental.returned_to = request.user
         rental.save()
 
-        # ✅ resync equipment using model logic (no manual increment)
         _equipment_sync(rental.equipment)
 
         if hasattr(rental.student, "student_profile"):
@@ -1766,7 +1770,6 @@ class CVViewSet(viewsets.ModelViewSet):
             except Exception:
                 pass
 
-        # HEADER centered like sample (photo left)
         center_x = (x0 + x1) / 2.0
 
         name_y = header_top - 8
@@ -1907,7 +1910,7 @@ class CVViewSet(viewsets.ModelViewSet):
                     draw_bullet(val, font=italic_font, size=body_size, indent=16)
             y -= 2
 
-        # ✅ LEADERSHIP
+        # ✅ LEADERSHIP (group involvements)
         leadership_qs = Involvement.objects.filter(cv=cv).order_by("order", "-id")
         org_map = {}
 
@@ -2204,3 +2207,218 @@ class AwardViewSet(BaseCVItemViewSet):
 
     def get_queryset(self):
         return Award.objects.filter(cv__student=self.request.user)
+# ---------------- PASSWORD RESET (OTP) ---------------- #
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def request_password_reset_otp(request):
+    """
+    STEP 1: Request OTP
+    Frontend calls: POST /api/auth/password-reset/request-otp/
+    Payload: { "email": "..." }
+    """
+    email = (request.data.get("email") or "").strip().lower()
+    if not email:
+        return Response({"detail": "email is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # TODO: implement real OTP logic (send email)
+    return Response(
+        {"message": "OTP requested (stub)", "email": email},
+        status=status.HTTP_200_OK
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def confirm_password_reset_otp(request):
+    """
+    STEP 2: Confirm OTP + set new password
+    Frontend calls: POST /api/auth/password-reset/confirm/
+    Payload: { "email": "...", "otp": "...", "new_password": "..." }
+    """
+    email = (request.data.get("email") or "").strip().lower()
+    otp = (request.data.get("otp") or "").strip()
+    new_password = request.data.get("new_password") or ""
+
+    if not email or not otp or not new_password:
+        return Response(
+            {"detail": "email, otp, and new_password are required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # TODO: implement real OTP validation + password reset
+    return Response(
+        {"message": "Password reset confirmed (stub)", "email": email},
+        status=status.HTTP_200_OK
+    )
+
+
+import os
+import random
+import time
+from django.conf import settings
+from django.core.cache import cache
+from django.core.mail import send_mail
+from django.contrib.auth import get_user_model
+
+
+
+
+# ---------------- PASSWORD RESET (OTP) ---------------- #
+
+import random
+from django.conf import settings
+from django.core.mail import send_mail
+from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password, check_password
+
+User = get_user_model()
+
+
+def _otp_ttl_seconds() -> int:
+    return int(getattr(settings, "OTP_TTL_SECONDS", 300))  # default 5 min
+
+
+def _otp_resend_cooldown() -> int:
+    return int(getattr(settings, "OTP_RESEND_COOLDOWN", 60))  # default 60 sec
+
+
+def _otp_max_attempts() -> int:
+    return int(getattr(settings, "OTP_MAX_ATTEMPTS", 5))
+
+
+def _generate_otp() -> str:
+    return f"{random.randint(0, 999999):06d}"
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def request_password_reset_otp(request):
+    """
+    STEP 1: Request OTP
+    POST /api/auth/password-reset/request-otp/
+    Payload: { "email": "..." }
+
+    ✅ DB-backed using PasswordResetOTP model
+    ✅ Generic response (doesn't leak whether email exists)
+    ✅ Cooldown to prevent spamming
+    """
+    email = (request.data.get("email") or "").strip().lower()
+    if not email:
+        return Response({"detail": "email is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    generic_ok = {"message": "If an account exists for this email, an OTP has been sent."}
+    now = timezone.now()
+
+    # Cooldown: if last OTP was created within cooldown window, return generic OK
+    cooldown_s = _otp_resend_cooldown()
+    latest = PasswordResetOTP.objects.filter(email__iexact=email).order_by("-created_at").first()
+    if latest:
+        try:
+            age = (now - latest.created_at).total_seconds()
+            if age < cooldown_s:
+                return Response(generic_ok, status=status.HTTP_200_OK)
+        except Exception:
+            return Response(generic_ok, status=status.HTTP_200_OK)
+
+    # Only send if a user exists (still return generic either way)
+    user = User.objects.filter(email__iexact=email).first()
+    if not user:
+        return Response(generic_ok, status=status.HTTP_200_OK)
+
+    # Invalidate previous unused OTPs (optional)
+    PasswordResetOTP.objects.filter(email__iexact=email, used=False).update(used=True)
+
+    ttl = _otp_ttl_seconds()
+    otp = _generate_otp()
+
+    otp_row = PasswordResetOTP.objects.create(
+        user=user,
+        email=email,
+        otp_hash=make_password(otp),
+        expires_at=now + timedelta(seconds=ttl),
+        used=False,
+        attempts=0,
+    )
+
+    subject = "AIU Media Hub - Password Reset OTP"
+    body = (
+        f"Your OTP code is: {otp}\n\n"
+        f"This code will expire in {max(ttl // 60, 1)} minutes.\n"
+        f"If you didn’t request this, you can ignore this email."
+    )
+
+    try:
+        send_mail(
+            subject,
+            body,
+            getattr(settings, "DEFAULT_FROM_EMAIL", None),
+            [email],
+            fail_silently=False,
+        )
+    except Exception:
+        # invalidate OTP if sending failed
+        otp_row.used = True
+        otp_row.save(update_fields=["used"])
+        return Response(
+            {"detail": "Unable to send OTP. Please try again later."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response(generic_ok, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def confirm_password_reset_otp(request):
+    """
+    STEP 2: Confirm OTP + set new password
+    POST /api/auth/password-reset/confirm/
+    Payload: { "email": "...", "otp": "...", "new_password": "..." }
+
+    ✅ Checks latest unused OTP for email
+    ✅ Enforces attempts limit + expiry + one-time use
+    """
+    email = (request.data.get("email") or "").strip().lower()
+    otp = (request.data.get("otp") or "").strip()
+    new_password = request.data.get("new_password") or ""
+
+    if not email or not otp or not new_password:
+        return Response(
+            {"detail": "email, otp, and new_password are required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    row = PasswordResetOTP.objects.filter(email__iexact=email, used=False).order_by("-created_at").first()
+    if not row:
+        return Response({"detail": "OTP expired or invalid."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if row.is_expired:
+        row.used = True
+        row.save(update_fields=["used"])
+        return Response({"detail": "OTP expired or invalid."}, status=status.HTTP_400_BAD_REQUEST)
+
+    max_attempts = _otp_max_attempts()
+    if int(row.attempts or 0) >= max_attempts:
+        row.used = True
+        row.save(update_fields=["used"])
+        return Response({"detail": "Too many attempts. Request a new OTP."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not check_password(otp, row.otp_hash):
+        row.attempts = int(row.attempts or 0) + 1
+        row.save(update_fields=["attempts"])
+        return Response({"detail": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.filter(email__iexact=email).first()
+    if not user:
+        row.used = True
+        row.save(update_fields=["used"])
+        return Response({"detail": "OTP expired or invalid."}, status=status.HTTP_400_BAD_REQUEST)
+
+    user.set_password(new_password)
+    user.save()
+
+    # mark all unused OTPs for this email as used
+    PasswordResetOTP.objects.filter(email__iexact=email, used=False).update(used=True)
+
+    return Response({"message": "Password has been reset successfully."}, status=status.HTTP_200_OK)

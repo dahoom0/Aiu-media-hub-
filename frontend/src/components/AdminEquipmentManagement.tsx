@@ -112,6 +112,37 @@ function normalizeList(data: any): any[] {
   return [];
 }
 
+// ✅ NEW: fetch ALL pages for DRF pagination
+// Works for:
+// - paginated: { count, next, previous, results: [...] }
+// - non-paginated: [ ... ]
+async function fetchAllPaginated(startUrl: string): Promise<any[]> {
+  const all: any[] = [];
+  let nextUrl: any = startUrl;
+
+  while (nextUrl) {
+    const res = await api.get(nextUrl);
+    const data = res.data;
+
+    if (data && Array.isArray(data.results)) {
+      all.push(...data.results);
+      nextUrl = data.next; // can be null, absolute URL, or relative URL
+      continue;
+    }
+
+    if (Array.isArray(data)) {
+      all.push(...data);
+      nextUrl = null;
+      continue;
+    }
+
+    // unknown shape -> stop safely
+    nextUrl = null;
+  }
+
+  return all;
+}
+
 function safeStatus(x: any) {
   return String(x || '').toLowerCase();
 }
@@ -310,12 +341,12 @@ export function AdminEquipmentManagement({
     }
   };
 
+  // ✅ UPDATED: fetch ALL equipment pages (not only ~20)
   const fetchEquipment = async () => {
     setIsLoading(true);
     try {
-      const res = await api.get(EQUIPMENT_BASE);
-      const rows = normalizeList(res.data);
-      setEquipment(rows.map(mapEquipmentFromAPI));
+      const allRows = await fetchAllPaginated(EQUIPMENT_BASE);
+      setEquipment(allRows.map(mapEquipmentFromAPI));
     } catch (err: any) {
       console.error(err);
       toast.error('Failed to load equipment');
@@ -325,11 +356,12 @@ export function AdminEquipmentManagement({
     }
   };
 
+  // ✅ OPTIONAL (safe): fetch ALL rentals pages too, in case rentals is paginated
   const fetchRentals = async () => {
     setRentalsLoading(true);
     try {
-      const res = await api.get(RENTALS_BASE);
-      setRentals(normalizeList(res.data) as EquipmentRentalRow[]);
+      const allRows = await fetchAllPaginated(RENTALS_BASE);
+      setRentals(allRows as EquipmentRentalRow[]);
     } catch (err: any) {
       console.error(err);
       toast.error('Failed to load equipment rental requests');

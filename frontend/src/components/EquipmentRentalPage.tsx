@@ -24,10 +24,15 @@ import {
   AlertCircle,
   ShoppingCart,
   Trash2,
+  ChevronDown,
 } from 'lucide-react';
 import { QRScanner } from './QRScanner';
 import { useTheme } from './ThemeProvider';
 import equipmentService from '../services/equipmentService';
+
+// ✅ shadcn dropdown (Popover + Command)
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from './ui/command';
 
 interface EquipmentRentalPageProps {
   onNavigate?: (page: string) => void;
@@ -52,6 +57,22 @@ type CartLine = {
   notes: string;
 
   categoryText?: string;
+};
+
+type CategoryTab = {
+  id: string;
+  label: string;
+  icon: any;
+};
+
+type MyRentalItem = {
+  id: number;
+  name: string;
+  qrCode: string;
+  requestedAt: string;
+  dueDate: string;
+  status: string;
+  reject_reason?: string | null;
 };
 
 export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
@@ -87,12 +108,19 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
   const [selectedAccessories, setSelectedAccessories] = useState<string[]>([]);
   const [customAccessory, setCustomAccessory] = useState('');
 
+  // ✅ NEW: dropdown open state for accessories
+  const [accessoriesOpen, setAccessoriesOpen] = useState(false);
+
   // --- REAL DATA STATE ---
   const [equipmentList, setEquipmentList] = useState<any[]>([]);
   const [accessoryList, setAccessoryList] = useState<any[]>([]);
-  const [myRentals, setMyRentals] = useState<any[]>([]);
+  const [myRentals, setMyRentals] = useState<MyRentalItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  // ✅ Rejection reason dialog state
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [selectedRejectedRental, setSelectedRejectedRental] = useState<MyRentalItem | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -108,7 +136,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
 
   const safeLower = (v: any) => String(v ?? '').toLowerCase().trim();
 
-  // ✅ NEW: normalize category names -> tab slugs (camera/audio/lighting/accessories)
+  // ✅ normalize category names -> tab slugs (camera/audio/lighting/accessories/...)
   const toCatSlug = (name: any) => {
     const n = safeLower(name);
 
@@ -122,32 +150,38 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     return n.replace(/\s+/g, '-');
   };
 
-  // ✅ NEW: derive slugs from M2M categories + legacy "category" field
-  const extractCatSlugs = (item: any) => {
+  // ✅ extract readable category names from equipment item (objects/strings/legacy)
+  const extractCatNames = (item: any) => {
     const cats = Array.isArray(item?.categories) ? item.categories : [];
 
-    const names = cats
+    const namesFromCats = cats
       .map((c: any) => (typeof c === 'object' ? c?.name ?? c?.label ?? c?.title : c))
+      .filter(Boolean)
+      .map((x: any) => String(x).trim())
       .filter(Boolean);
 
-    const slugsFromCats = names.map(toCatSlug).filter(Boolean);
-
-    const legacy = item?.category; // could be "camera" OR "cameras audio lighting"
-    // if legacy is a big string, split by non-letters and map each token
+    const legacy = item?.category;
     const legacyTokens =
       typeof legacy === 'string'
         ? legacy
-            .split(/[^a-zA-Z]+/g)
+            .split(/[,/|]+/g)
             .map((x) => x.trim())
             .filter(Boolean)
         : legacy
-          ? [legacy]
+          ? [String(legacy).trim()]
           : [];
 
-    const legacySlugs = legacyTokens.map(toCatSlug).filter(Boolean);
+    const merged = [...namesFromCats, ...legacyTokens].map((x) => String(x).trim()).filter(Boolean);
 
-    const merged = [...slugsFromCats, ...legacySlugs].filter(Boolean);
+    // unique
     return Array.from(new Set(merged));
+  };
+
+  // ✅ derive slugs from M2M categories + legacy "category" field
+  const extractCatSlugs = (item: any) => {
+    const names = extractCatNames(item);
+    const slugs = names.map(toCatSlug).filter(Boolean);
+    return Array.from(new Set(slugs));
   };
 
   // ---- My Bookings status helpers ----
@@ -286,7 +320,8 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
           item?.equipmentCode ?? item?.equipmentId ?? item?.equipment_id ?? item?.qrCode ?? ''
         ).trim();
 
-        // ✅ NEW: correct slugs for tabs
+        // ✅ derive categories/slugs from backend data (dynamic)
+        const categoryNames = extractCatNames(item);
         const categorySlugs = extractCatSlugs(item);
 
         return {
@@ -295,7 +330,13 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
 
           name: item?.name || '',
           category: categoryString, // old display-ish text
-          categorySlugs, // ✅ use this for tab filtering
+
+          // Keep raw categories array too (for modal list)
+          categories: categoriesArr,
+
+          // ✅ dynamic names + slugs
+          categoryNames,
+          categorySlugs,
 
           status: item?.status || 'available',
 
@@ -305,7 +346,6 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
           specs: item?.description || item?.specs || 'Professional equipment',
           image: item?.image || '',
           quantity_available: Number(item?.quantity_available ?? item?.quantityAvailable ?? 0),
-          categories: categoriesArr,
         };
       });
 
@@ -316,7 +356,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
         if (Number.isFinite(id)) equipmentById.set(id, eq);
       });
 
-      const recent5 = [...rawRentals]
+      const recent5: MyRentalItem[] = [...rawRentals]
         .sort((a: any, b: any) => getRentalSortKey(b) - getRentalSortKey(a))
         .slice(0, 5)
         .map((rental: any) => {
@@ -333,7 +373,11 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
           const eqFromCatalog = equipmentId ? equipmentById.get(equipmentId) : null;
 
           const name =
-            eqFromRental?.name || eqFromCatalog?.name || rental?.equipment_name || rental?.equipment_title || 'Equipment';
+            eqFromRental?.name ||
+            eqFromCatalog?.name ||
+            rental?.equipment_name ||
+            rental?.equipment_title ||
+            'Equipment';
 
           const qrCode =
             rental?.equipment_id ||
@@ -355,13 +399,15 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
             requestedAt,
             dueDate,
             status: rental.status,
+            // ✅ REQUIRED for rejected comment dialog
+            reject_reason: rental?.reject_reason ?? null,
           };
         });
 
       setEquipmentList(mappedEquipment);
       setMyRentals(recent5);
 
-      // keep cart availability in sync after refresh
+      // keep cart availability fresh after refresh
       setTimeout(() => refreshCartAvailabilityFromCatalog(), 0);
     } catch (error) {
       console.error('Failed to fetch equipment', error);
@@ -498,7 +544,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
 
           tasks.push(
             equipmentService.checkout(
-              line.equipmentCode, // ✅ CAM001 (code) required by /equipment/checkout/
+              line.equipmentCode, // ✅ CAM001
               'Main Desk',
               pickupDate,
               line.durationDays,
@@ -529,6 +575,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     setRentalDuration('1');
     setCustomAccessory('');
     setSelectedAccessories([]);
+    setAccessoriesOpen(false);
     setShowRentalModal(true);
   };
 
@@ -547,20 +594,62 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     }
   };
 
-  const categories = [
-    { id: 'all', label: 'All Equipment', icon: Package },
-    { id: 'camera', label: 'Cameras', icon: Camera },
-    { id: 'audio', label: 'Audio', icon: Mic },
-    { id: 'lighting', label: 'Lighting', icon: Lightbulb },
-    { id: 'accessories', label: 'Accessories', icon: Film },
-  ];
+  // ✅ DYNAMIC CATEGORY TABS:
+  const categories: CategoryTab[] = useMemo(() => {
+    const base: CategoryTab[] = [{ id: 'all', label: 'All Equipment', icon: Package }];
 
-  // ✅ UPDATED FILTER: use categorySlugs includes(selectedCategory)
+    const map = new Map<string, { label: string; slug: string }>();
+
+    equipmentList.forEach((item: any) => {
+      const names = Array.isArray(item?.categoryNames) ? item.categoryNames : extractCatNames(item);
+      names.forEach((nm: any) => {
+        const label = String(nm ?? '').trim();
+        if (!label) return;
+        const slug = toCatSlug(label);
+        if (!slug) return;
+        if (!map.has(slug)) {
+          map.set(slug, { label, slug });
+        }
+      });
+    });
+
+    // stable ordering: by label
+    const sorted = Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+
+    const iconFor = (slug: string, label: string) => {
+      const s = safeLower(slug || label);
+      if (s.includes('camera')) return Camera;
+      if (s.includes('audio') || s.includes('mic')) return Mic;
+      if (s.includes('light')) return Lightbulb;
+      if (s.includes('access')) return Film;
+      return Package;
+    };
+
+    return [
+      ...base,
+      ...sorted.map((x) => ({
+        id: x.slug,
+        label: x.label,
+        icon: iconFor(x.slug, x.label),
+      })),
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [equipmentList]);
+
+  // ✅ UPDATED FILTER:
   const filteredEquipment = equipmentList.filter((item) => {
-    const matchesSearch = safeLower(item?.name).includes(safeLower(searchQuery));
+    const q = safeLower(searchQuery);
+
+    const hay = [
+      safeLower(item?.name),
+      safeLower(item?.specs),
+      safeLower(item?.qrCode),
+      safeLower(item?.equipmentCode),
+    ].join(' ');
+
+    const matchesSearch = !q || hay.includes(q);
 
     const slugs = Array.isArray(item?.categorySlugs) ? item.categorySlugs : extractCatSlugs(item);
-
     const matchesCategory = selectedCategory === 'all' || slugs.includes(selectedCategory);
 
     return matchesSearch && matchesCategory;
@@ -588,7 +677,6 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     const fullNotes = `Additional Items: ${itemsList}. ${customAccessory ? 'Note: ' + customAccessory : ''}`;
 
     try {
-      // backend checkout expects equipment_id code (CAM001) in your service checkout()
       await equipmentService.checkout(selectedEquipment.qrCode, 'Main Desk', pickupDate, rentalDuration, fullNotes);
       alert(`Successfully rented ${selectedEquipment.name}`);
       setShowRentalModal(false);
@@ -625,9 +713,33 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
     }
   };
 
+  // ✅ Ensure selectedCategory stays valid when backend categories change
+  useEffect(() => {
+    const valid = categories.some((c) => c.id === selectedCategory);
+    if (!valid) setSelectedCategory('all');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categories]);
+
+  // ✅ Open rejection dialog (student clicks rejected booking)
+  const openRejectReasonDialog = (rental: MyRentalItem) => {
+    setSelectedRejectedRental(rental);
+    setRejectDialogOpen(true);
+  };
+
+  // ✅ Display text for dropdown trigger
+  const accessoriesTriggerText = useMemo(() => {
+    if (!selectedAccessories || selectedAccessories.length === 0) return 'Select accessories...';
+    if (selectedAccessories.length === 1) return selectedAccessories[0];
+    return `${selectedAccessories.length} accessories selected`;
+  }, [selectedAccessories]);
+
   if (loading) {
     return (
-      <div className={`min-h-screen flex items-center justify-center ${theme === 'light' ? 'bg-[#EBF2FA]' : 'bg-gray-950'}`}>
+      <div
+        className={`min-h-screen flex items-center justify-center ${
+          theme === 'light' ? 'bg-[#EBF2FA]' : 'bg-gray-950'
+        }`}
+      >
         <Loader2 className="h-8 w-8 animate-spin text-teal-500" />
       </div>
     );
@@ -644,7 +756,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
       </div>
 
       {/* Search + Cart + QR Scanner */}
-      <div className="flex gap-4">
+      <div className="flex flex-col md:flex-row gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
           <Input
@@ -659,39 +771,45 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
           />
         </div>
 
-        <Button
-          variant="outline"
-          className={`relative ${
-            theme === 'light'
-              ? 'bg-white border-gray-200 text-gray-900 hover:bg-gray-50'
-              : 'bg-gray-900 border-gray-700 text-white hover:bg-gray-800'
-          }`}
-          onClick={() => {
-            refreshCartAvailabilityFromCatalog();
-            setCartOpen(true);
-          }}
-        >
-          <ShoppingCart className="h-4 w-4 mr-2" />
-          Cart
-          {cartCount > 0 && (
-            <span className="ml-2 inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs bg-teal-500 text-white">
-              {cartCount}
-            </span>
-          )}
-        </Button>
+        <div className="flex gap-4">
+          <Button
+            variant="outline"
+            className={`relative ${
+              theme === 'light'
+                ? 'bg-white border-gray-200 text-gray-900 hover:bg-gray-50'
+                : 'bg-gray-900 border-gray-700 text-white hover:bg-gray-800'
+            }`}
+            onClick={() => {
+              refreshCartAvailabilityFromCatalog();
+              setCartOpen(true);
+            }}
+          >
+            <ShoppingCart className="h-4 w-4 mr-2" />
+            Cart
+            {cartCount > 0 && (
+              <span className="ml-2 inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs bg-teal-500 text-white">
+                {cartCount}
+              </span>
+            )}
+          </Button>
 
-        <Button
-          className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
-          onClick={() => setShowQRScanner(true)}
-        >
-          <QrCode className="h-4 w-4 mr-2" />
-          Scan QR
-        </Button>
+          <Button
+            className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+            onClick={() => setShowQRScanner(true)}
+          >
+            <QrCode className="h-4 w-4 mr-2" />
+            Scan QR
+          </Button>
+        </div>
       </div>
 
       {/* Categories */}
       <Tabs value={selectedCategory} onValueChange={setSelectedCategory}>
-        <TabsList className={`border ${theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}`}>
+        <TabsList
+          className={`border ${
+            theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'
+          } w-full overflow-x-auto whitespace-nowrap`}
+        >
           {categories.map((category) => {
             const Icon = category.icon;
             return (
@@ -804,10 +922,21 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
                 const canReturn = statusLower === 'approved' || statusLower === 'active';
                 const canCancel = statusLower === 'pending';
 
+                // ✅ clickable only for rejected items (shows reject_reason dialog)
+                const isRejected = statusLower === 'rejected';
+                const hasReason = Boolean(String(rental.reject_reason ?? '').trim());
+                const clickable = isRejected && hasReason;
+
                 return (
                   <div
                     key={rental.id}
-                    className="flex flex-col md:flex-row md:items-center justify-between p-4 rounded-lg bg-gray-800/50 border border-gray-700 gap-4"
+                    onClick={() => {
+                      if (clickable) openRejectReasonDialog(rental);
+                    }}
+                    className={`flex flex-col md:flex-row md:items-center justify-between p-4 rounded-lg bg-gray-800/50 border border-gray-700 gap-4 ${
+                      clickable ? 'cursor-pointer' : ''
+                    }`}
+                    title={clickable ? 'Click to view admin comment' : undefined}
                   >
                     <div className="space-y-2">
                       <div className="flex items-center gap-3">
@@ -851,7 +980,10 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
                           size="sm"
                           variant="outline"
                           className="border-red-500/50 text-red-400 hover:bg-red-500/10"
-                          onClick={() => handleCancel(rental.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCancel(rental.id);
+                          }}
                         >
                           Cancel
                         </Button>
@@ -866,7 +998,10 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
                               ? 'bg-gray-100 text-gray-400'
                               : 'bg-gray-800 text-gray-400'
                         }`}
-                        onClick={() => handleReturn(rental.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleReturn(rental.id);
+                        }}
                         disabled={!canReturn}
                       >
                         <CheckCircle2 className="h-4 w-4 mr-2" />
@@ -880,6 +1015,35 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
           </div>
         </CardContent>
       </Card>
+
+      {/* ✅ Reject Reason Dialog */}
+      <Dialog
+        open={rejectDialogOpen}
+        onOpenChange={(open) => {
+          setRejectDialogOpen(open);
+          if (!open) setSelectedRejectedRental(null);
+        }}
+      >
+        <DialogContent className="max-w-md bg-gray-900 border-gray-800 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-white">Request Rejected</DialogTitle>
+            <DialogDescription className="text-gray-400">Admin comment for this request</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <div className="text-sm text-gray-400">
+              <span className="text-white">{selectedRejectedRental?.name || 'Equipment'}</span>
+              {selectedRejectedRental?.qrCode ? (
+                <span className="text-gray-500"> • ID: {selectedRejectedRental.qrCode}</span>
+              ) : null}
+            </div>
+
+            <div className="p-3 rounded-lg bg-gray-950 border border-gray-700 text-sm text-white whitespace-pre-wrap">
+              {String(selectedRejectedRental?.reject_reason ?? '').trim() || 'No comment provided.'}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* NEW: Cart Dialog */}
       <Dialog open={cartOpen} onOpenChange={setCartOpen}>
@@ -1016,7 +1180,7 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
         </DialogContent>
       </Dialog>
 
-      {/* Rental Modal (kept) */}
+      {/* Rental Modal (UPDATED accessories to dropdown) */}
       <Dialog open={showRentalModal} onOpenChange={setShowRentalModal}>
         <DialogContent className="max-w-md bg-gray-900 border-gray-800 text-white max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -1037,32 +1201,76 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
               </div>
             </div>
 
+            {/* ✅ Accessories dropdown (scroll + search) */}
             <div className="space-y-2">
-              <Label className="text-gray-300">Select Available Accessories</Label>
-              <div className="p-3 rounded-lg bg-gray-950 border border-gray-700 space-y-2 max-h-40 overflow-y-auto">
-                {accessoryList.length === 0 ? (
-                  <p className="text-sm text-gray-500">No additional accessories found.</p>
-                ) : (
-                  accessoryList.map((acc: any) => (
-                    <div
-                      key={acc.id}
-                      className="flex items-center gap-3 cursor-pointer hover:bg-gray-900 p-1 rounded"
-                      onClick={() => toggleAccessory(acc.name)}
-                    >
-                      <div
-                        className={`h-4 w-4 rounded border flex items-center justify-center ${
-                          selectedAccessories.includes(acc.name) ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
-                        }`}
-                      >
-                        {selectedAccessories.includes(acc.name) && <CheckSquare className="h-3 w-3 text-white" />}
-                      </div>
-                      <span className={`text-sm ${selectedAccessories.includes(acc.name) ? 'text-white' : 'text-gray-500'}`}>
-                        {acc.name} <span className="text-xs text-gray-600">({acc.status})</span>
-                      </span>
+              <Label className="text-gray-300">Accessories</Label>
+
+              <Popover open={accessoriesOpen} onOpenChange={setAccessoriesOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-between border-gray-700 text-white hover:bg-gray-800 bg-gray-950"
+                  >
+                    <span className={`text-sm ${selectedAccessories.length ? 'text-white' : 'text-gray-500'}`}>
+                      {accessoriesTriggerText}
+                    </span>
+                    <ChevronDown className="h-4 w-4 text-gray-400" />
+                  </Button>
+                </PopoverTrigger>
+
+                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0 bg-gray-950 border-gray-700 text-white">
+                  <Command className="bg-gray-950 text-white">
+                    <CommandInput placeholder="Search accessories..." className="text-white" />
+                    <CommandList className="max-h-48 overflow-y-auto">
+                      <CommandEmpty>No accessories found.</CommandEmpty>
+                      <CommandGroup>
+                        {accessoryList.length === 0 ? (
+                          <div className="px-3 py-3 text-sm text-gray-500">No additional accessories found.</div>
+                        ) : (
+                          accessoryList.map((acc: any) => {
+                            const name = String(acc?.name ?? '').trim();
+                            if (!name) return null;
+                            const selected = selectedAccessories.includes(name);
+
+                            return (
+                              <CommandItem
+                                key={acc.id ?? name}
+                                value={name}
+                                onSelect={() => toggleAccessory(name)}
+                                className="cursor-pointer aria-selected:bg-gray-900"
+                              >
+                                <div
+                                  className={`mr-2 h-4 w-4 rounded border flex items-center justify-center ${
+                                    selected ? 'bg-teal-500 border-teal-500' : 'border-gray-500'
+                                  }`}
+                                >
+                                  {selected && <CheckSquare className="h-3 w-3 text-white" />}
+                                </div>
+
+                                <div className="flex items-center justify-between w-full">
+                                  <span className={`text-sm ${selected ? 'text-white' : 'text-gray-300'}`}>{name}</span>
+                                  {acc?.status ? (
+                                    <span className="text-xs text-gray-500 ml-3">({String(acc.status)})</span>
+                                  ) : null}
+                                </div>
+                              </CommandItem>
+                            );
+                          })
+                        )}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+
+                  {selectedAccessories.length > 0 ? (
+                    <div className="border-t border-gray-700 p-2 text-xs text-gray-500">
+                      Selected: {selectedAccessories.join(', ')}
                     </div>
-                  ))
-                )}
-              </div>
+                  ) : null}
+                </PopoverContent>
+              </Popover>
+
+              <p className="text-xs text-gray-500">Click to open dropdown, scroll to choose accessories.</p>
             </div>
 
             <div className="space-y-2">

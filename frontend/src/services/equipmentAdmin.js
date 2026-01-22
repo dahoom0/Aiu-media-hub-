@@ -44,6 +44,37 @@ const normalizeList = (data) => {
   return [];
 };
 
+// ✅ NEW: fetch all pages when DRF pagination is enabled
+// Works for:
+// - paginated: { count, next, previous, results: [...] }
+// - non-paginated: [ ... ]
+const fetchAllPaginated = async (startUrl) => {
+  const all = [];
+  let nextUrl = startUrl;
+
+  while (nextUrl) {
+    const res = await api.get(nextUrl);
+    const data = res.data;
+
+    if (data && Array.isArray(data.results)) {
+      all.push(...data.results);
+      nextUrl = data.next; // may be null, absolute URL, or relative URL
+      continue;
+    }
+
+    if (Array.isArray(data)) {
+      all.push(...data);
+      nextUrl = null;
+      continue;
+    }
+
+    // unknown shape -> stop safely
+    nextUrl = null;
+  }
+
+  return all;
+};
+
 // categories read shape: [{id,name,color}]
 const normalizeCategoryObj = (cat) => {
   if (!cat) return null;
@@ -178,9 +209,10 @@ const equipmentAdmin = {
   // -------------------------
   // EQUIPMENT CRUD
   // -------------------------
+  // ✅ UPDATED: fetch ALL pages from /equipment/
   list: async () => {
-    const res = await api.get(BASE);
-    return normalizeList(res.data).map(toUI);
+    const allRaw = await fetchAllPaginated(BASE);
+    return allRaw.map(toUI);
   },
 
   create: async (payload = {}) => {
