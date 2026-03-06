@@ -461,6 +461,8 @@ export const CVPreviewPage: React.FC<CVPreviewPageProps> = ({
                         style={{
                           height: `${A4_HEIGHT_MM}mm`,
                           border: 'none',
+                          pointerEvents: 'none',
+                          userSelect: 'none'
                         }}
                       />
                     ) : (

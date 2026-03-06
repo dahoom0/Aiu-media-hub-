@@ -212,7 +212,7 @@ export default function App() {
       case 'tutorials':
         return (
           <DashboardLayout activePage="tutorials" onNavigate={handleNavigate} isAdmin={isAdmin}>
-            <TutorialsPage />
+            <TutorialsPage onNavigate={handleNavigate} initialVideoId={navigationParams?.videoId} />
           </DashboardLayout>
         );
 

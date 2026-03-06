@@ -100,7 +100,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "http://172.16.125.71:5173",  # LAN frontend (CURRENT IP)
+    "http://172.16.117.65:5173",
+    "http://172.16.0.0:5173",  # LAN frontend (CURRENT IP)
 ]
 
 ALLOWED_HOSTS = ["*"]

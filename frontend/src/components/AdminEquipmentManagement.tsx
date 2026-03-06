@@ -1,3 +1,13 @@
+/**
+ * AdminEquipmentManagement Component
+ * 
+ * Comprehensive dashboard for managing equipment inventory, categories, and rental requests.
+ * Enables admins to add/edit/delete equipment, approve/reject rental requests, and export data.
+ */
+
+// ============================================================================
+// IMPORTS - Third-party libraries and React components
+// ============================================================================
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -12,18 +22,33 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Plus, Edit, Trash2, Upload, CheckCircle2, XCircle, Clock, Download } from 'lucide-react';
 import { toast } from 'sonner';
 
-// ✅ Use your existing axios client (same one used everywhere with JWT)
+// API client for making HTTP requests to the backend
 import api from '../services/apiClient';
 
+// ============================================================================
+// CONSTANTS - API configuration and endpoints
+// ============================================================================
+
+// Base URL for API endpoints (backend server origin)
 const API_ORIGIN = 'http://localhost:8000';
 
-const buildMediaUrl = (val: any) => {
-  if (!val) return '';
+// ============================================================================
+// UTILITY FUNCTIONS - Helper methods for data transformation
+// ============================================================================
 
+/**
+ * Constructs a complete media URL from various input formats
+ * Handles relative paths, absolute URLs, and object-based responses
+ */
+const buildMediaUrl = (val: any) => {
+  if (!val) return ''; // Return an empty string if the value is null or undefined
+
+  // If the value is a valid URL string, return it as is
   if (typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://'))) {
     return val;
   }
 
+  // If the value is an object with a 'url' property, construct the full URL
   if (typeof val === 'object' && val?.url) {
     const u = val.url;
     if (u.startsWith('http://') || u.startsWith('https://')) return u;
@@ -31,6 +56,7 @@ const buildMediaUrl = (val: any) => {
     return `${API_ORIGIN}/${u}`;
   }
 
+  // Handle other cases where the value is a string
   const url = String(val);
 
   if (url.startsWith('/media/')) return `${API_ORIGIN}${url}`;
@@ -38,19 +64,27 @@ const buildMediaUrl = (val: any) => {
 
   if (!url.startsWith('/')) return `${API_ORIGIN}/media/${url}`;
 
-  return `${API_ORIGIN}${url}`;
+  return `${API_ORIGIN}${url}`; // Default case
 };
 
-type StatusString =
-  | 'pending'
-  | 'approved'
-  | 'rejected'
-  | 'active'
-  | 'returned'
-  | 'cancelled'
-  | 'completed'
-  | string;
+// ============================================================================
+// TYPE DEFINITIONS - Data structures for equipment and rentals
+// ============================================================================
 
+/**
+ * Status values used across equipment items and rental requests
+ */
+type StatusString =
+  | 'pending' // Status when the request is awaiting approval
+  | 'approved' // Status when the request has been approved
+  | 'rejected' // Status when the request has been rejected
+  | 'active'   // Status when the equipment is actively in use
+  | 'returned' // Status when the equipment has been returned
+  | 'cancelled'; // Status when the request has been cancelled
+
+/**
+ * Represents a single equipment rental request row from the backend
+ */
 type EquipmentRentalRow = {
   id: number;
   status?: StatusString;
@@ -77,12 +111,19 @@ type EquipmentRentalRow = {
   updated_at?: string;
 };
 
+/**
+ * Represents an equipment category row from the backend
+ */
 type EquipmentCategoryRow = {
   id: number;
   name: string;
   created_at?: string;
 };
 
+/**
+ * Frontend UI representation of equipment with normalized backend data
+ * Ensures consistent data structure for all equipment items
+ */
 interface EquipmentUI {
   id: string; // keep string (Select uses string keys often)
   name: string;
@@ -104,7 +145,9 @@ interface EquipmentUI {
   description: string;
 }
 
-// -------- helpers --------
+/**
+ * Normalizes paginated or non-paginated API responses into a flat array
+ */
 function normalizeList(data: any): any[] {
   if (!data) return [];
   if (Array.isArray(data)) return data;
@@ -112,10 +155,10 @@ function normalizeList(data: any): any[] {
   return [];
 }
 
-// ✅ NEW: fetch ALL pages for DRF pagination
-// Works for:
-// - paginated: { count, next, previous, results: [...] }
-// - non-paginated: [ ... ]
+/**
+ * Handles Django REST Framework pagination by fetching all pages
+ * Supports both paginated and non-paginated responses
+ */
 async function fetchAllPaginated(startUrl: string): Promise<any[]> {
   const all: any[] = [];
   let nextUrl: any = startUrl;
@@ -143,10 +186,16 @@ async function fetchAllPaginated(startUrl: string): Promise<any[]> {
   return all;
 }
 
+/**
+ * Safely converts any value to lowercase status string, handling null/undefined
+ */
 function safeStatus(x: any) {
   return String(x || '').toLowerCase();
 }
 
+/**
+ * Converts various status formats to standard equipment status values
+ */
 function normalizeEquipmentStatus(x: any): EquipmentUI['status'] {
   const s = safeStatus(x);
   if (s === 'available') return 'available';
@@ -160,6 +209,9 @@ function normalizeEquipmentStatus(x: any): EquipmentUI['status'] {
   return 'available';
 }
 
+/**
+ * Safely parses ISO datetime strings to localized date/time display
+ */
 function safeTime(t?: string) {
   if (!t) return '—';
   const d = new Date(t);
@@ -167,6 +219,9 @@ function safeTime(t?: string) {
   return d.toLocaleString();
 }
 
+/**
+ * Extracts filename from Content-Disposition header (used in file exports)
+ */
 function filenameFromContentDisposition(cd?: string) {
   if (!cd) return '';
   const m = /filename\*?=(?:UTF-8'')?("?)([^";]+)\1/i.exec(cd);
@@ -178,6 +233,9 @@ function filenameFromContentDisposition(cd?: string) {
   }
 }
 
+/**
+ * Triggers browser download dialog for a Blob object (CSV exports)
+ */
 function triggerBlobDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -189,11 +247,16 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-// -------- API endpoints (must match your DRF router) --------
+// ============================================================================
+// API ENDPOINTS - Backend router configuration
+// ============================================================================
 const EQUIPMENT_BASE = '/equipment/';
 const RENTALS_BASE = '/equipment-rentals/';
 const CATEGORIES_BASE = '/equipment-categories/';
 
+// ============================================================================
+// COMPONENT - Main equipment management admin panel
+// ============================================================================
 export function AdminEquipmentManagement({
   onNavigate,
 }: {
@@ -201,25 +264,35 @@ export function AdminEquipmentManagement({
 }) {
   const { theme } = useTheme();
 
+  // ============================================================================
+  // DIALOG & UI STATE MANAGEMENT
+  // ============================================================================
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [selectedEquipment, setSelectedEquipment] = useState<EquipmentUI | null>(null);
 
-  // ✅ Reject dialog state
+  // Rental rejection dialog state
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
   const [rejectTargetId, setRejectTargetId] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState('');
 
-  // ✅ Export states
+  // Status change dialog state
+  const [isStatusDialogOpen, setIsStatusDialogOpen] = useState(false);
+  const [statusChangeTarget, setStatusChangeTarget] = useState<{ id: string; status: EquipmentUI['status']; item: EquipmentUI } | null>(null);
+  const [statusChangeQuantity, setStatusChangeQuantity] = useState<number>(1);
+
+  // CSV export loading states
   const [exportInventoryLoading, setExportInventoryLoading] = useState(false);
   const [exportRentalsLoading, setExportRentalsLoading] = useState<Record<string, boolean>>({});
 
-  // Form state (UI)
+  // ============================================================================
+  // FORM STATE - Equipment add/edit form fields
+  // ============================================================================
   const [equipmentName, setEquipmentName] = useState('');
   const [equipmentId, setEquipmentId] = useState('');
   const [equipmentCategoryIds, setEquipmentCategoryIds] = useState<number[]>([]);
 
-  // ✅ inventory fields (backend-aligned)
+  // Inventory tracking fields (synced with backend database)
   const [equipmentTotal, setEquipmentTotal] = useState<number>(1);
   const [equipmentAvailable, setEquipmentAvailable] = useState<number>(1);
   const [equipmentMaintenance, setEquipmentMaintenance] = useState<number>(0);
@@ -229,12 +302,14 @@ export function AdminEquipmentManagement({
   const [equipmentImage, setEquipmentImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState('');
 
-  // Backend data
+  // ============================================================================
+  // DATA STATE - Backend responses and cache
+  // ============================================================================
   const [equipment, setEquipment] = useState<EquipmentUI[]>([]);
   const [categories, setCategories] = useState<EquipmentCategoryRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Rentals
+  // Equipment rental request data
   const [rentals, setRentals] = useState<EquipmentRentalRow[]>([]);
   const [rentalsLoading, setRentalsLoading] = useState(false);
   const [rentalActionLoading, setRentalActionLoading] = useState<Record<number, 'approve' | 'reject' | null>>({});
@@ -245,10 +320,17 @@ export function AdminEquipmentManagement({
     return m;
   }, [categories]);
 
-  // ✅ Dialog sizing (fit screen without changing UI look)
+  // ============================================================================
+  // COMPUTED VALUES & MEMOIZATION
+  // ============================================================================
+  
+  // Responsive dialog sizing for all breakpoints
   const dialogFitClass = `w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto`;
 
-  // -------- mapping between backend and UI --------
+  /**
+   * Transforms raw backend equipment data into standardized UI format
+   * Handles multiple data structures and normalizes all fields
+   */
   const mapEquipmentFromAPI = (item: any): EquipmentUI => {
     const rawId = item?.id;
     const id = rawId != null ? String(rawId) : (crypto?.randomUUID?.() ?? String(Date.now()));
@@ -313,6 +395,7 @@ export function AdminEquipmentManagement({
     };
   };
 
+  // Equipment status summary statistics
   const stats = useMemo(() => {
     return {
       available: equipment.filter(e => e.status === 'available').length,
@@ -321,6 +404,7 @@ export function AdminEquipmentManagement({
     };
   }, [equipment]);
 
+  // Rental request status summary statistics
   const rentalStats = useMemo(() => {
     const pending = rentals.filter(r => safeStatus(r.status) === 'pending').length;
     const active = rentals.filter(r => safeStatus(r.status) === 'active' || safeStatus(r.status) === 'approved').length;
@@ -328,7 +412,13 @@ export function AdminEquipmentManagement({
     return { pending, active, returned };
   }, [rentals]);
 
-  // -------- fetchers --------
+  // ============================================================================
+  // DATA FETCHING - Backend API calls for all data
+  // ============================================================================
+  
+  /**
+   * Fetches all equipment categories from the backend
+   */
   const fetchCategories = async () => {
     try {
       const res = await api.get(CATEGORIES_BASE);
@@ -341,7 +431,9 @@ export function AdminEquipmentManagement({
     }
   };
 
-  // ✅ UPDATED: fetch ALL equipment pages (not only ~20)
+  /**
+   * Fetches all equipment items with pagination support
+   */
   const fetchEquipment = async () => {
     setIsLoading(true);
     try {
@@ -356,7 +448,9 @@ export function AdminEquipmentManagement({
     }
   };
 
-  // ✅ OPTIONAL (safe): fetch ALL rentals pages too, in case rentals is paginated
+  /**
+   * Fetches all equipment rental requests with pagination support
+   */
   const fetchRentals = async () => {
     setRentalsLoading(true);
     try {
@@ -371,16 +465,24 @@ export function AdminEquipmentManagement({
     }
   };
 
+  /**
+   * Refreshes all data from the backend (categories, equipment, rentals)
+   */
   const refreshAll = async () => {
     await Promise.all([fetchCategories(), fetchEquipment(), fetchRentals()]);
   };
 
+  // ============================================================================
+  // LIFECYCLE HOOKS
+  // ============================================================================
+  
+  // Initial data load on component mount
   useEffect(() => {
     refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ keep values consistent without changing UI
+  // Validates inventory constraints (available <= total, maintenance <= available)
   useEffect(() => {
     // available cannot exceed total
     if (equipmentAvailable > equipmentTotal) {
@@ -393,7 +495,13 @@ export function AdminEquipmentManagement({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [equipmentTotal, equipmentAvailable, equipmentMaintenance]);
 
-  // -------- form helpers --------
+  // ============================================================================
+  // FORM HANDLERS - Image upload, validation, and form reset
+  // ============================================================================
+  
+  /**
+   * Handles equipment image file selection and preview generation
+   */
   const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -404,6 +512,9 @@ export function AdminEquipmentManagement({
     }
   };
 
+  /**
+   * Clears all form fields and resets to initial state
+   */
   const resetForm = () => {
     setEquipmentName('');
     setEquipmentId('');
@@ -419,6 +530,9 @@ export function AdminEquipmentManagement({
     setImagePreview('');
   };
 
+  /**
+   * Validates inventory values for logical constraints and business rules
+   */
   const validateInventory = () => {
     if (equipmentTotal < 0 || equipmentAvailable < 0 || equipmentMaintenance < 0) {
       toast.error('Inventory values cannot be negative');
@@ -435,8 +549,10 @@ export function AdminEquipmentManagement({
     return true;
   };
 
-  // -------- create/update helpers (match serializer: category_ids, and model fields) --------
-  // ✅ IMPORTANT: DO NOT send quantity_available (backend serializer marks it read-only)
+  /**
+   * Constructs FormData for equipment API requests
+   * Note: quantity_available is read-only and auto-calculated by the backend
+   */
   const buildEquipmentFormData = (payload: {
     name: string;
     equipment_id: string;
@@ -467,6 +583,13 @@ export function AdminEquipmentManagement({
     return fd;
   };
 
+  // ============================================================================
+  // EQUIPMENT CRUD OPERATIONS
+  // ============================================================================
+  
+  /**
+   * Creates new equipment item with validation and image upload
+   */
   const handleAddEquipment = async () => {
     if (!equipmentName || !equipmentId || equipmentCategoryIds.length === 0) {
       toast.error('Please fill in all required fields (including at least one category)');
@@ -513,6 +636,9 @@ export function AdminEquipmentManagement({
     }
   };
 
+  /**
+   * Updates existing equipment item with validation and image upload
+   */
   const handleEditEquipment = async () => {
     if (!selectedEquipment) return;
 
@@ -562,6 +688,9 @@ export function AdminEquipmentManagement({
     }
   };
 
+  /**
+   * Populates form with equipment data and opens edit dialog
+   */
   const openEditDialog = (item: EquipmentUI) => {
     setSelectedEquipment(item);
 
@@ -582,22 +711,64 @@ export function AdminEquipmentManagement({
     setIsEditDialogOpen(true);
   };
 
+  /**
+   * Updates equipment status (available, rented, maintenance)
+   */
   const handleStatusChange = async (id: string, newStatus: EquipmentUI['status']) => {
+    const item = equipment.find(e => e.id === id);
+    if (!item) return;
+
+    // If changing to maintenance or rented, show dialog to ask for quantity
+    if (newStatus === 'maintenance' || newStatus === 'rented') {
+      setStatusChangeTarget({ id, status: newStatus, item });
+      setStatusChangeQuantity(1);
+      setIsStatusDialogOpen(true);
+      return;
+    }
+
+    // For 'available', directly update without quantity dialog (resets counter)
+    await updateEquipmentStatus(id, newStatus, 0);
+  };
+
+  /**
+   * Confirms and applies the status change with quantity
+   */
+  const confirmStatusChange = async () => {
+    if (!statusChangeTarget) return;
+
+    const { id, status } = statusChangeTarget;
+    await updateEquipmentStatus(id, status, statusChangeQuantity);
+    setIsStatusDialogOpen(false);
+    setStatusChangeTarget(null);
+  };
+
+  /**
+   * Sends status update request to backend
+   */
+  const updateEquipmentStatus = async (id: string, newStatus: EquipmentUI['status'], quantity: number) => {
     const prev = equipment;
     setEquipment(curr => curr.map(item => (item.id === id ? { ...item, status: newStatus } : item)));
 
     try {
-      const res = await api.patch(`${EQUIPMENT_BASE}${id}/`, { status: newStatus });
-      const updated = mapEquipmentFromAPI(res.data);
+      const res = await api.post(`${EQUIPMENT_BASE}${id}/update-status/`, { 
+        status: newStatus,
+        quantity: quantity 
+      });
+      
+      const updated = mapEquipmentFromAPI(res.data.equipment);
       setEquipment(curr => curr.map(item => (item.id === id ? updated : item)));
-      toast.success('Equipment status updated!');
+      toast.success(res.data.message || 'Equipment status updated!');
     } catch (err: any) {
       console.error(err);
       setEquipment(prev);
-      toast.error('Failed to update status');
+      const errorMsg = err?.response?.data?.error || 'Failed to update status';
+      toast.error(errorMsg);
     }
   };
 
+  /**
+   * Removes equipment item from inventory
+   */
   const handleDeleteEquipment = async (id: string) => {
     const prev = equipment;
     setEquipment(curr => curr.filter(e => e.id !== id));
@@ -612,7 +783,13 @@ export function AdminEquipmentManagement({
     }
   };
 
-  // -------- rentals actions (require backend actions in viewset) --------
+  // ============================================================================
+  // RENTAL MANAGEMENT - Approval, rejection, and request handling
+  // ============================================================================
+  
+  /**
+   * Approves a pending equipment rental request
+   */
   const approveRental = async (id: number) => {
     setRentalActionLoading(prev => ({ ...prev, [id]: 'approve' }));
     try {
@@ -628,6 +805,9 @@ export function AdminEquipmentManagement({
     }
   };
 
+  /**
+   * Rejects a rental request with admin-provided reason
+   */
   const rejectRental = async (id: number, reason: string) => {
     setRentalActionLoading(prev => ({ ...prev, [id]: 'reject' }));
     try {
@@ -642,12 +822,18 @@ export function AdminEquipmentManagement({
     }
   };
 
+  /**
+   * Opens rejection dialog and prepares form for reason input
+   */
   const openRejectDialog = (rentalId: number) => {
     setRejectTargetId(rentalId);
     setRejectReason('');
     setIsRejectDialogOpen(true);
   };
 
+  /**
+   * Validates and submits rental rejection with reason
+   */
   const confirmReject = async () => {
     const id = rejectTargetId;
     const reason = rejectReason.trim();
@@ -665,7 +851,13 @@ export function AdminEquipmentManagement({
     setRejectReason('');
   };
 
-  // -------- exports (require backend endpoints) --------
+  // ============================================================================
+  // DATA EXPORT - CSV download functionality
+  // ============================================================================
+  
+  /**
+   * Exports all equipment inventory to CSV file
+   */
   const exportInventoryCsv = async () => {
     setExportInventoryLoading(true);
     try {
@@ -682,6 +874,9 @@ export function AdminEquipmentManagement({
     }
   };
 
+  /**
+   * Exports rental history for specific equipment to CSV file
+   */
   const exportRentalsCsv = async (equipmentIdValue: string) => {
     if (!equipmentIdValue) {
       toast.error('Missing equipment ID');
@@ -703,7 +898,13 @@ export function AdminEquipmentManagement({
     }
   };
 
-  // -------- UI helpers --------
+  // ============================================================================
+  // UI UTILITIES - Status colors and display formatting
+  // ============================================================================
+  
+  /**
+   * Returns Tailwind color classes based on equipment status
+   */
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'available':
@@ -717,6 +918,9 @@ export function AdminEquipmentManagement({
     }
   };
 
+  /**
+   * Returns Tailwind color classes based on rental request status
+   */
   const getRentalStatusBadge = (status: string) => {
     const s = safeStatus(status);
     if (s === 'pending') return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
@@ -726,12 +930,21 @@ export function AdminEquipmentManagement({
     return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
   };
 
+  /**
+   * Navigates to student profile page for detailed view
+   */
   const handleOpenStudentProfile = (studentId?: string) => {
     if (!studentId) return;
     onNavigate?.('admin-profiles', { studentId });
   };
 
+  /**
+   * Filters and memoizes pending rental requests for performance
+   */
   const pendingRentals = useMemo(() => rentals.filter(r => safeStatus(r.status) === 'pending'), [rentals]);
+  /**
+   * Filters and memoizes active/approved rental requests for performance
+   */
   const activeRentals = useMemo(
     () =>
       rentals.filter(r => {
@@ -741,10 +954,16 @@ export function AdminEquipmentManagement({
     [rentals]
   );
 
+  /**
+   * Toggles category selection in add/edit form
+   */
   const toggleCategoryId = (id: number) => {
     setEquipmentCategoryIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   };
 
+  /**
+   * Extracts and displays category names from equipment object
+   */
   const displayCategoryNames = (item: EquipmentUI) => {
     if (item.categories?.length) return item.categories;
     if (item.category_ids?.length) {
@@ -755,11 +974,17 @@ export function AdminEquipmentManagement({
     return [];
   };
 
+  /**
+   * Calculates number of items currently rentable (available - maintenance)
+   */
   const rentableNow = useMemo(() => Math.max(0, equipmentAvailable - equipmentMaintenance), [equipmentAvailable, equipmentMaintenance]);
 
+  // ============================================================================
+  // RENDER - Main component UI structure
+  // ============================================================================
   return (
     <div className="p-6 space-y-6">
-      {/* Reject Reason Dialog */}
+      {/* ====== RENTAL REJECTION DIALOG ====== */}
       <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
         <DialogContent className={`${dialogFitClass} max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
           <DialogHeader>
@@ -802,7 +1027,72 @@ export function AdminEquipmentManagement({
         </DialogContent>
       </Dialog>
 
-      {/* Header */}
+      {/* ====== STATUS CHANGE DIALOG ====== */}
+      <Dialog open={isStatusDialogOpen} onOpenChange={setIsStatusDialogOpen}>
+        <DialogContent className={`${dialogFitClass} max-w-md ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+          <DialogHeader>
+            <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
+              Change Status to {statusChangeTarget?.status === 'maintenance' ? 'Maintenance' : 'Rented'}
+            </DialogTitle>
+            <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+              How many units do you want to mark as {statusChangeTarget?.status}?
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Equipment</Label>
+              <div className={`mt-2 p-3 rounded-lg border ${theme === 'light' ? 'bg-gray-50 border-gray-200' : 'bg-gray-800 border-gray-700'}`}>
+                <div className={`font-medium ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
+                  {statusChangeTarget?.item.name}
+                </div>
+                <div className={`text-sm mt-1 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                  Total: {statusChangeTarget?.item.quantity_total || 0} units
+                </div>
+                <div className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                  Available: {statusChangeTarget?.item.quantity_available || 0} units
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Number of units *</Label>
+              <Input
+                type="number"
+                min="1"
+                max={statusChangeTarget?.item.quantity_available || 1}
+                value={statusChangeQuantity}
+                onChange={(e) => setStatusChangeQuantity(Math.max(1, Math.min(parseInt(e.target.value) || 1, statusChangeTarget?.item.quantity_available || 1)))}
+                className={`mt-2 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'}`}
+              />
+              <p className={`text-sm mt-1 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                Enter how many units to mark as {statusChangeTarget?.status}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsStatusDialogOpen(false);
+                setStatusChangeTarget(null);
+              }}
+              className={theme === 'light' ? 'border-gray-200' : 'border-gray-700'}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmStatusChange}
+              className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+            >
+              Confirm
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ====== PAGE HEADER WITH ACTION BUTTONS ====== */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Equipment Management</h1>
@@ -832,6 +1122,7 @@ export function AdminEquipmentManagement({
           </Button>
 
           <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+            {/* Add Equipment Button & Dialog Trigger */}
             <DialogTrigger asChild>
               <Button
                 className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
@@ -1023,7 +1314,7 @@ export function AdminEquipmentManagement({
         </div>
       </div>
 
-      {/* Requests & Usage */}
+      {/* ====== RENTAL REQUESTS & USAGE TRACKING SECTION ====== */}
       <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -1043,7 +1334,7 @@ export function AdminEquipmentManagement({
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {/* Pending */}
+          {/* --- Pending Rental Requests Table --- */}
           <div className="space-y-3">
             <div className={`text-sm flex items-center gap-2 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
               <Clock className="h-4 w-4" />
@@ -1140,7 +1431,7 @@ export function AdminEquipmentManagement({
             </Table>
           </div>
 
-          {/* Active */}
+          {/* --- Active/Approved Rentals Table --- */}
           <div className="space-y-3">
             <div className={`text-sm flex items-center gap-2 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
               <CheckCircle2 className="h-4 w-4" />
@@ -1221,7 +1512,7 @@ export function AdminEquipmentManagement({
         </CardContent>
       </Card>
 
-      {/* Equipment Table */}
+      {/* ====== EQUIPMENT INVENTORY TABLE ====== */}
       <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
         <CardHeader>
           <CardTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>All Equipment</CardTitle>
@@ -1345,7 +1636,7 @@ export function AdminEquipmentManagement({
         </CardContent>
       </Card>
 
-      {/* Edit Dialog */}
+      {/* ====== EDIT EQUIPMENT DIALOG ====== */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
         <DialogContent className={`${dialogFitClass} ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
           <DialogHeader>

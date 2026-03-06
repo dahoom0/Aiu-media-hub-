@@ -13,9 +13,10 @@ import tutorialService from '../services/tutorialService';
 
 interface TutorialsPageProps {
   onNavigate?: (page: string) => void;
+  initialVideoId?: number;
 }
 
-export function TutorialsPage({ onNavigate }: TutorialsPageProps) {
+export function TutorialsPage({ onNavigate, initialVideoId }: TutorialsPageProps) {
   const { theme } = useTheme();
 
   // --- STATE ---
@@ -75,6 +76,16 @@ export function TutorialsPage({ onNavigate }: TutorialsPageProps) {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Auto-play video if initialVideoId is provided
+  useEffect(() => {
+    if (initialVideoId && tutorials.length > 0 && !selectedVideo) {
+      const videoToPlay = tutorials.find(t => t.id === initialVideoId);
+      if (videoToPlay) {
+        setSelectedVideo(videoToPlay);
+      }
+    }
+  }, [initialVideoId, tutorials, selectedVideo]);
 
   // --- RENDER VIDEO PLAYER ---
   if (selectedVideo) {

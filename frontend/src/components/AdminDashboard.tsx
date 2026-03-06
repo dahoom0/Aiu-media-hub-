@@ -14,7 +14,8 @@ import {
   Clock,
   CheckCircle2,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  Download
 } from 'lucide-react';
 
 import adminService from '../services/adminService';
@@ -606,6 +607,150 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     return { total, inUse, percent };
   }, [labs, bookings]);
 
+  const handleDownloadUsageReport = async () => {
+    try {
+      // Dynamically import xlsx library
+      const XLSX = await import('xlsx');
+
+      // 1. Summary Sheet
+      const summaryData = [
+        ['SYSTEM USAGE REPORT'],
+        ['Generated:', new Date().toLocaleString()],
+        [''],
+        ['OVERVIEW'],
+        ['Total Lab Bookings', bookings.length],
+        ['Total Equipment Rentals', rentals.length],
+        ['Total CV Submissions', cvs.length],
+        ['Total Requests', bookings.length + rentals.length + cvs.length],
+        [''],
+        ['LAB BOOKINGS BREAKDOWN'],
+        ['Approved', bookings.filter(b => safeStatus(b.status) === 'approved').length],
+        ['Rejected', bookings.filter(b => safeStatus(b.status) === 'rejected').length],
+        ['Pending', bookings.filter(b => safeStatus(b.status) === 'pending').length],
+        ['Completed', bookings.filter(b => safeStatus(b.status) === 'completed').length],
+        ['Cancelled', bookings.filter(b => safeStatus(b.status) === 'cancelled').length],
+        [''],
+        ['EQUIPMENT RENTALS BREAKDOWN'],
+        ['Approved', rentals.filter(r => safeStatus(r.status) === 'approved').length],
+        ['Rejected', rentals.filter(r => safeStatus(r.status) === 'rejected').length],
+        ['Pending', rentals.filter(r => safeStatus(r.status) === 'pending').length],
+        ['Active', rentals.filter(r => safeStatus(r.status) === 'active').length],
+        ['Returned', rentals.filter(r => safeStatus(r.status) === 'returned').length],
+        [''],
+        ['CV SUBMISSIONS BREAKDOWN'],
+        ['Approved', cvs.filter(c => safeStatus(c.status) === 'approved').length],
+        ['Rejected', cvs.filter(c => safeStatus(c.status) === 'rejected').length],
+        ['Pending', cvs.filter(c => safeStatus(c.status) === 'pending').length],
+        ['Flagged', cvs.filter(c => safeStatus(c.status) === 'flagged').length],
+        ['Needs Changes', cvs.filter(c => safeStatus(c.status) === 'needs-changes').length],
+      ];
+
+      // 2. Lab Bookings Detail Sheet
+      const labBookingsData = [
+        ['ID', 'Student', 'Lab Room', 'Date', 'Time Slot', 'iMac Number', 'Purpose', 'Status', 'Created At', 'Updated At']
+      ];
+      bookings.forEach(b => {
+        labBookingsData.push([
+          b.id,
+          studentDisplay(b),
+          b.lab_room || '',
+          bookingDate(b),
+          b.time_slot || '',
+          b.imac_number || '',
+          b.purpose || '',
+          safeStatus(b.status),
+          safeTime(b.created_at),
+          safeTime(b.updated_at)
+        ]);
+      });
+
+      // 3. Equipment Rentals Detail Sheet
+      const equipmentRentalsData = [
+        ['ID', 'Student', 'Equipment', 'Start Date', 'End Date', 'Duration', 'Status', 'Created At', 'Updated At']
+      ];
+      rentals.forEach(r => {
+        equipmentRentalsData.push([
+          r.id,
+          studentDisplay(r),
+          rentalItemLabel(r),
+          r.start_date || '',
+          r.end_date || '',
+          rentalDurationLabel(r),
+          safeStatus(r.status),
+          safeTime(r.created_at),
+          safeTime(r.updated_at)
+        ]);
+      });
+
+      // 4. CV Submissions Detail Sheet
+      const cvSubmissionsData = [
+        ['ID', 'Student', 'Student Email', 'CV Title', 'Status', 'Created At', 'Updated At']
+      ];
+      cvs.forEach(c => {
+        cvSubmissionsData.push([
+          c.id,
+          studentDisplay(c),
+          c.user?.email || '',
+          cvItemLabel(c),
+          safeStatus(c.status),
+          safeTime(c.created_at),
+          safeTime(c.updated_at)
+        ]);
+      });
+
+      // 5. Status Statistics Sheet
+      const statusStatsData = [
+        ['SERVICE', 'STATUS', 'COUNT'],
+        ['Lab Bookings', 'Approved', bookings.filter(b => safeStatus(b.status) === 'approved').length],
+        ['Lab Bookings', 'Rejected', bookings.filter(b => safeStatus(b.status) === 'rejected').length],
+        ['Lab Bookings', 'Pending', bookings.filter(b => safeStatus(b.status) === 'pending').length],
+        ['Lab Bookings', 'Completed', bookings.filter(b => safeStatus(b.status) === 'completed').length],
+        ['Lab Bookings', 'Cancelled', bookings.filter(b => safeStatus(b.status) === 'cancelled').length],
+        [''],
+        ['Equipment Rentals', 'Approved', rentals.filter(r => safeStatus(r.status) === 'approved').length],
+        ['Equipment Rentals', 'Rejected', rentals.filter(r => safeStatus(r.status) === 'rejected').length],
+        ['Equipment Rentals', 'Pending', rentals.filter(r => safeStatus(r.status) === 'pending').length],
+        ['Equipment Rentals', 'Active', rentals.filter(r => safeStatus(r.status) === 'active').length],
+        ['Equipment Rentals', 'Returned', rentals.filter(r => safeStatus(r.status) === 'returned').length],
+        [''],
+        ['CV Submissions', 'Approved', cvs.filter(c => safeStatus(c.status) === 'approved').length],
+        ['CV Submissions', 'Rejected', cvs.filter(c => safeStatus(c.status) === 'rejected').length],
+        ['CV Submissions', 'Pending', cvs.filter(c => safeStatus(c.status) === 'pending').length],
+        ['CV Submissions', 'Flagged', cvs.filter(c => safeStatus(c.status) === 'flagged').length],
+        ['CV Submissions', 'Needs Changes', cvs.filter(c => safeStatus(c.status) === 'needs-changes').length],
+      ];
+
+      // Create workbook
+      const wb = XLSX.utils.book_new();
+
+      // Add sheets
+      const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+      const wsLabBookings = XLSX.utils.aoa_to_sheet(labBookingsData);
+      const wsEquipmentRentals = XLSX.utils.aoa_to_sheet(equipmentRentalsData);
+      const wsCVSubmissions = XLSX.utils.aoa_to_sheet(cvSubmissionsData);
+      const wsStatusStats = XLSX.utils.aoa_to_sheet(statusStatsData);
+
+      XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+      XLSX.utils.book_append_sheet(wb, wsLabBookings, 'Lab Bookings');
+      XLSX.utils.book_append_sheet(wb, wsEquipmentRentals, 'Equipment Rentals');
+      XLSX.utils.book_append_sheet(wb, wsCVSubmissions, 'CV Submissions');
+      XLSX.utils.book_append_sheet(wb, wsStatusStats, 'Status Statistics');
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const filename = `System_Usage_Report_${timestamp}.xlsx`;
+
+      // Download file
+      XLSX.writeFile(wb, filename);
+
+      // Show success message (you can add toast notification here)
+      console.log('Usage report downloaded successfully');
+    } catch (error) {
+      console.error('Failed to generate usage report:', error);
+      setError('Failed to generate usage report. Please try again.');
+    }
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -807,29 +952,62 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
           </CardContent>
         </Card>
 
-        <Card className="bg-gray-900/50 border-gray-800">
+        <Card 
+          className="bg-gray-900/50 border-gray-800 cursor-pointer hover:border-teal-500/50 transition-colors"
+          onClick={handleDownloadUsageReport}
+        >
           <CardHeader>
-            <CardTitle className="text-white">System Health</CardTitle>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-white">System Usage</CardTitle>
+                <CardDescription className="text-gray-400">Click to download detailed report</CardDescription>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-teal-500/50 text-teal-400 hover:bg-teal-500/10"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownloadUsageReport();
+                }}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Database</span>
               <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-teal-400" />
-                <span className="text-sm text-teal-400">Online</span>
+                <Calendar className="h-4 w-4 text-purple-400" />
+                <span className="text-gray-400 text-sm">Lab Bookings</span>
               </div>
+              <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/50">
+                {bookings.length} requests
+              </Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">API Server</span>
               <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-teal-400" />
-                <span className="text-sm text-teal-400">Online</span>
+                <Package className="h-4 w-4 text-cyan-400" />
+                <span className="text-gray-400 text-sm">Equipment Rentals</span>
               </div>
+              <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/50">
+                {rentals.length} requests
+              </Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Storage</span>
-              <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/50">
-                78% Used
+              <div className="flex items-center gap-2">
+                <Video className="h-4 w-4 text-orange-400" />
+                <span className="text-gray-400 text-sm">CV Submissions</span>
+              </div>
+              <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/50">
+                {cvs.length} requests
+              </Badge>
+            </div>
+            <div className="flex items-center justify-between pt-3 border-t border-gray-800">
+              <span className="text-gray-300 text-sm font-medium">Total Requests</span>
+              <Badge className="bg-teal-500/20 text-teal-400 border-teal-500/50">
+                {bookings.length + rentals.length + cvs.length}
               </Badge>
             </div>
           </CardContent>

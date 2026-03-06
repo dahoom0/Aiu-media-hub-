@@ -478,6 +478,13 @@ class EquipmentSerializer(serializers.ModelSerializer):
     # ✅ legacy model field (CharField choices)
     category = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
+    # ✅ writable status field with validation
+    status = serializers.ChoiceField(
+        choices=['available', 'rented', 'maintenance'],
+        required=False,
+        help_text="Equipment status: available, rented, or maintenance"
+    )
+
     # ✅ computed fields (read-only)
     rented_units = serializers.SerializerMethodField()
     rentable_quantity = serializers.SerializerMethodField()
@@ -572,18 +579,11 @@ class EquipmentSerializer(serializers.ModelSerializer):
             except Exception:
                 rented = 0
 
-        available_now = max(total - rented, 0)
-
-        if total < int(rented):
+        # Check total allocation (rented + maintenance)
+        total_allocated = rented + maint
+        if total < total_allocated:
             raise serializers.ValidationError({
-                "quantity_total": f"Total cannot be less than currently rented units ({rented})."
-            })
-
-        if maint > available_now:
-            raise serializers.ValidationError({
-                "quantity_under_maintenance": (
-                    f"Under maintenance cannot exceed available (not rented) units ({available_now})."
-                )
+                "quantity_total": f"Total ({total}) cannot be less than allocated units: {rented} rented + {maint} maintenance = {total_allocated}."
             })
 
         # ✅ require at least one category on create

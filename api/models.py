@@ -360,11 +360,13 @@ class Equipment(models.Model):
     def computed_available(self) -> int:
         total = int(self.quantity_total or 0)
         rented = int(self.rented_units() or 0)
-        return max(total - rented, 0)
+        maintenance = int(self.quantity_under_maintenance or 0)
+        return max(total - rented - maintenance, 0)
 
     @property
     def rentable_quantity(self) -> int:
-        return max(self.computed_available - int(self.quantity_under_maintenance or 0), 0)
+        # computed_available already subtracts maintenance, so just return it
+        return self.computed_available
 
     def clean(self):
         # -------- integer checks --------
@@ -383,21 +385,11 @@ class Equipment(models.Model):
         # ✅ safe: object may not have pk during create -> rentals can't be queried yet
         rented = int(self.rented_units() or 0) if self.pk else 0
 
-        # total cannot be less than currently rented units
-        if total < rented:
+        # total cannot be less than currently rented + maintenance units
+        total_allocated = rented + maint
+        if total < total_allocated:
             raise ValidationError({
-                "quantity_total": f"Total cannot be less than currently rented units ({rented})."
-            })
-
-        # maintenance must be <= available (not rented)
-        available_now = max(total - rented, 0)
-        if maint > available_now:
-            raise ValidationError({
-                "quantity_under_maintenance": (
-                    f"Under maintenance is too high. "
-                    f"Only units NOT rented can be marked maintenance. "
-                    f"Max allowed now is {available_now}."
-                )
+                "quantity_total": f"Total ({total}) cannot be less than allocated units: {rented} rented + {maint} maintenance = {total_allocated}."
             })
 
     def save(self, *args, **kwargs):
@@ -407,16 +399,17 @@ class Equipment(models.Model):
         # ✅ Auto-sync stored available so Django admin + API never show wrong values
         self.quantity_available = self.computed_available
 
-        # ✅ Auto status (optional)
-        if self.rentable_quantity <= 0:
-            if self.quantity_under_maintenance > 0:
-                self.status = 'maintenance'
-            elif self.rented_units() > 0:
-                self.status = 'rented'
-            else:
-                self.status = 'available'
-        else:
-            self.status = 'available'
+        # ✅ Auto status disabled - allows manual status control
+        # If you want automatic status management, uncomment the code below:
+        # if self.rentable_quantity <= 0:
+        #     if self.quantity_under_maintenance > 0:
+        #         self.status = 'maintenance'
+        #     elif self.rented_units() > 0:
+        #         self.status = 'rented'
+        #     else:
+        #         self.status = 'available'
+        # else:
+        #     self.status = 'available'
 
         # QR generation unchanged
         if not self.qr_code and self.equipment_id:

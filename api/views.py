@@ -1216,6 +1216,67 @@ class EquipmentViewSet(viewsets.ModelViewSet):
 
         _equipment_sync(updated)
 
+    @action(detail=True, methods=["post"], url_path="update-status")
+    def update_status(self, request, pk=None):
+        """
+        Custom endpoint to update equipment status with quantity tracking.
+        Uses existing quantity_under_maintenance field.
+        Expects: { "status": "maintenance|rented|available", "quantity": <number> }
+        """
+        equipment = self.get_object()
+        new_status = request.data.get("status", "").strip().lower()
+        quantity = request.data.get("quantity", 0)
+
+        try:
+            quantity = int(quantity)
+        except (ValueError, TypeError):
+            return Response({"error": "Quantity must be a valid number"}, status=400)
+
+        if quantity < 0:
+            return Response({"error": "Quantity cannot be negative"}, status=400)
+
+        if new_status not in ["available", "rented", "maintenance"]:
+            return Response({"error": "Invalid status. Must be: available, rented, or maintenance"}, status=400)
+
+        # Calculate current available units
+        current_available = equipment.computed_available
+
+        # Update status and quantity_under_maintenance field
+        if new_status == "maintenance":
+            if quantity > current_available:
+                return Response({
+                    "error": f"Cannot set {quantity} units to maintenance. Only {current_available} units available."
+                }, status=400)
+            equipment.quantity_under_maintenance = quantity
+            equipment.status = "maintenance"
+
+        elif new_status == "rented":
+            # For rented status, we use quantity_under_maintenance to track the count
+            # This is a workaround to avoid database changes
+            if quantity > current_available:
+                return Response({
+                    "error": f"Cannot set {quantity} units to rented. Only {current_available} units available."
+                }, status=400)
+            equipment.quantity_under_maintenance = quantity
+            equipment.status = "rented"
+
+        elif new_status == "available":
+            # Reset maintenance counter when setting to available
+            equipment.quantity_under_maintenance = 0
+            equipment.status = "available"
+
+        try:
+            equipment.save()
+            serializer = self.get_serializer(equipment)
+            return Response({
+                "message": "Status updated successfully",
+                "equipment": serializer.data
+            })
+        except ValidationError as e:
+            return Response({"error": str(e)}, status=400)
+        except Exception as e:
+            return Response({"error": f"Failed to update status: {str(e)}"}, status=500)
+
     @action(detail=False, methods=["post"])
     def checkout(self, request):
         eid = request.data.get("equipment_id")

@@ -13,7 +13,11 @@ import {
   TrendingUp,
   Loader2,
   AlertCircle,
-  Play
+  Play,
+  MessageSquare,
+  Flag,
+  AlertTriangle,
+  CheckCircle
 } from 'lucide-react';
 import authService from '../services/authService';
 import labBookingService from '../services/labBookingService';
@@ -52,6 +56,7 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
   const [upcomingBookings, setUpcomingBookings] = useState<any[]>([]);
   const [activeRentals, setActiveRentals] = useState<any[]>([]);
   const [recentTutorials, setRecentTutorials] = useState<any[]>([]);
+  const [cvFeedback, setCvFeedback] = useState<any>(null);
 
   const [stats, setStats] = useState({
     bookingsCount: 0, // ✅ accepted/approved only
@@ -99,9 +104,21 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
           rentalsData = [];
         }
 
-        // 3) Fetch CV (for projects count)
+        // 3) Fetch CV (for projects count AND feedback)
         try {
           cvData = await cvService.getMyCV();
+          
+          // Check if there's admin feedback
+          if (cvData && (cvData.status === 'approved' || cvData.status === 'flagged' || cvData.status === 'needs-changes')) {
+            if (cvData.admin_comment || cvData.status === 'approved') {
+              setCvFeedback({
+                status: cvData.status,
+                comment: cvData.admin_comment || 'Your CV has been approved!',
+                reviewedBy: cvData.reviewed_by_name || 'Admin',
+                reviewedAt: cvData.reviewed_at ? new Date(cvData.reviewed_at).toLocaleDateString() : 'Recently'
+              });
+            }
+          }
         } catch (e) {
           console.warn('CV fetch failed', e);
           cvData = {};
@@ -372,6 +389,73 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
 
       {/* Main Content Grid */}
       <div className="grid gap-6 lg:grid-cols-2">
+        {/* CV Feedback Card - Show if there's feedback */}
+        {cvFeedback && (
+          <Card className={`border-2 ${
+            cvFeedback.status === 'approved' 
+              ? 'bg-teal-500/10 border-teal-500/50' 
+              : cvFeedback.status === 'flagged'
+              ? 'bg-red-500/10 border-red-500/50'
+              : 'bg-yellow-500/10 border-yellow-500/50'
+          }`}>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-white flex items-center gap-2">
+                  {cvFeedback.status === 'approved' ? (
+                    <CheckCircle className="h-5 w-5 text-teal-400" />
+                  ) : cvFeedback.status === 'flagged' ? (
+                    <Flag className="h-5 w-5 text-red-400" />
+                  ) : (
+                    <AlertTriangle className="h-5 w-5 text-yellow-400" />
+                  )}
+                  CV {cvFeedback.status === 'approved' ? 'Approved' : cvFeedback.status === 'flagged' ? 'Flagged' : 'Feedback'}
+                </CardTitle>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-teal-400 hover:text-teal-300"
+                  onClick={() => onNavigate('student-cv-view')}
+                >
+                  View Details
+                </Button>
+              </div>
+              <CardDescription className="text-gray-400">
+                Reviewed by {cvFeedback.reviewedBy} • {cvFeedback.reviewedAt}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className={`p-4 rounded-lg border-l-4 ${
+                cvFeedback.status === 'approved'
+                  ? 'bg-teal-500/20 border-teal-500'
+                  : cvFeedback.status === 'flagged'
+                  ? 'bg-red-500/20 border-red-500'
+                  : 'bg-yellow-500/20 border-yellow-500'
+              }`}>
+                <div className="flex items-start gap-3">
+                  <MessageSquare className={`h-5 w-5 mt-0.5 ${
+                    cvFeedback.status === 'approved' ? 'text-teal-400' :
+                    cvFeedback.status === 'flagged' ? 'text-red-400' : 'text-yellow-400'
+                  }`} />
+                  <div className="flex-1">
+                    <p className="text-white text-sm font-medium mb-1">Admin Comment:</p>
+                    <p className="text-gray-300 text-sm whitespace-pre-wrap">
+                      {cvFeedback.comment}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              {cvFeedback.status !== 'approved' && (
+                <Button
+                  className="w-full bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+                  onClick={() => onNavigate('cv-generator')}
+                >
+                  Update Your CV
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Upcoming Bookings */}
         <Card className="bg-gray-900/50 border-gray-800">
           <CardHeader>
@@ -513,7 +597,7 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
               recentTutorials.map((tutorial) => (
                 <button
                   key={tutorial.id}
-                  onClick={() => onNavigate(`video-player?id=${tutorial.id}`)}
+                  onClick={() => onNavigate('tutorials', { videoId: tutorial.id })}
                   className="p-4 rounded-lg bg-gray-800/50 border border-gray-700 space-y-3 hover:bg-gray-800 hover:border-teal-500/50 transition-all cursor-pointer text-left w-full"
                 >
                   <div className="flex items-start justify-between">

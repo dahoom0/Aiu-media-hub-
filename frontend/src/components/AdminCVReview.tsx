@@ -13,6 +13,7 @@ import {
   User,
   Loader2,
   RotateCcw,
+  CheckCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import apiClient from '../services/apiClient';
@@ -215,8 +216,54 @@ export function AdminCVReview({
     setPdfLoading(false);
   };
 
-  const handleFlagCV = () => {
-    toast.success('CV flagged for review');
+  const handleFlagCV = async () => {
+    if (!selectedCV) return;
+    if (!adminComment.trim()) {
+      toast.error('Please enter feedback before flagging the CV');
+      return;
+    }
+
+    try {
+      await apiClient.patch(`/cvs/${selectedCV.id}/`, {
+        status: 'flagged',
+        admin_comment: adminComment,
+      });
+      
+      toast.success('CV flagged and feedback sent to student');
+      setAdminComment('');
+      
+      // Update local state
+      setSelectedCV({ ...selectedCV, status: 'flagged' });
+      setStudentCVs(prev => 
+        prev.map(cv => cv.id === selectedCV.id ? { ...cv, status: 'flagged' } : cv)
+      );
+    } catch (e) {
+      console.error('Failed to flag CV', e);
+      toast.error('Failed to flag CV. Please try again.');
+    }
+  };
+
+  const handleApproveCV = async () => {
+    if (!selectedCV) return;
+
+    try {
+      await apiClient.patch(`/cvs/${selectedCV.id}/`, {
+        status: 'approved',
+        admin_comment: adminComment.trim() || 'CV approved',
+      });
+      
+      toast.success('CV approved successfully');
+      setAdminComment('');
+      
+      // Update local state
+      setSelectedCV({ ...selectedCV, status: 'approved' });
+      setStudentCVs(prev => 
+        prev.map(cv => cv.id === selectedCV.id ? { ...cv, status: 'approved' } : cv)
+      );
+    } catch (e) {
+      console.error('Failed to approve CV', e);
+      toast.error('Failed to approve CV. Please try again.');
+    }
   };
 
   const handleDownloadCV = async () => {
@@ -252,13 +299,31 @@ export function AdminCVReview({
     }
   };
 
-  const handleSaveComment = () => {
-    if (!adminComment) {
+  const handleSaveComment = async () => {
+    if (!selectedCV) return;
+    if (!adminComment.trim()) {
       toast.error('Please enter a comment');
       return;
     }
-    toast.success('Comment saved and sent to student');
-    setAdminComment('');
+
+    try {
+      await apiClient.patch(`/cvs/${selectedCV.id}/`, {
+        status: 'needs-changes',
+        admin_comment: adminComment,
+      });
+      
+      toast.success('Feedback saved and sent to student');
+      setAdminComment('');
+      
+      // Update local state
+      setSelectedCV({ ...selectedCV, status: 'needs-changes' });
+      setStudentCVs(prev => 
+        prev.map(cv => cv.id === selectedCV.id ? { ...cv, status: 'needs-changes' } : cv)
+      );
+    } catch (e) {
+      console.error('Failed to save comment', e);
+      toast.error('Failed to save feedback. Please try again.');
+    }
   };
 
   const handleViewStudentProfile = () => {
@@ -342,7 +407,16 @@ export function AdminCVReview({
               className={theme === 'light' ? 'border-gray-200' : 'border-gray-700'}
             >
               <User className="h-4 w-4 mr-2" />
-              View Student Profile
+              View Profile
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={handleApproveCV}
+              className="border-teal-500/50 text-teal-400 hover:bg-teal-500/10"
+            >
+              <CheckCircle className="h-4 w-4 mr-2" />
+              Approve
             </Button>
 
             <Button
@@ -351,7 +425,7 @@ export function AdminCVReview({
               className="border-red-500/50 text-red-400 hover:bg-red-500/10"
             >
               <Flag className="h-4 w-4 mr-2" />
-              Flag CV
+              Flag
             </Button>
 
             <Button
@@ -368,7 +442,7 @@ export function AdminCVReview({
               ) : (
                 <>
                   <RotateCcw className="h-4 w-4 mr-2" />
-                  Refresh Preview
+                  Refresh
                 </>
               )}
             </Button>
@@ -378,7 +452,7 @@ export function AdminCVReview({
               className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
             >
               <Download className="h-4 w-4 mr-2" />
-              Download CV
+              Download
             </Button>
           </div>
         </div>
@@ -427,6 +501,8 @@ export function AdminCVReview({
                       style={{
                         height: `${A4_HEIGHT_MM}mm`,
                         border: 'none',
+                        pointerEvents: 'none',
+                        userSelect: 'none'
                       }}
                     />
                   ) : (

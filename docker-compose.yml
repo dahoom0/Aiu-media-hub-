@@ -5,6 +5,14 @@ services:
     image: mysql:8.0
     restart: always
     container_name: aiu_mysql
+    command: --default-authentication-plugin=mysql_native_password
+      --max_connections=500
+      --innodb_buffer_pool_size=512M
+      --innodb_log_file_size=128M
+      --innodb_flush_log_at_trx_commit=2
+      --innodb_flush_method=O_DIRECT
+      --query_cache_type=1
+      --query_cache_size=64M
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiu_mediahub}
@@ -14,22 +22,49 @@ services:
       - mysql_data:/var/lib/mysql
     ports:
       - "3306:3306"
+    networks:
+      - aiu_network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root123}"]
       timeout: 5s
       retries: 10
+      interval: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
   backend:
     build:
       context: .
-      dockerfile: aiu_backend/Dockerfile
+      dockerfile: Dockerfile
     restart: always
     container_name: aiu_backend
     command: bash -c "
-      until nc -z db 3306; do echo 'Waiting for MySQL...'; sleep 1; done &&
+      echo 'Waiting for MySQL to be ready...' &&
+      until nc -z db 3306; do echo 'MySQL not ready, waiting...'; sleep 2; done &&
+      echo 'MySQL is ready!' &&
+      echo 'Running migrations...' &&
       python manage.py migrate &&
+      echo 'Collecting static files...' &&
       python manage.py collectstatic --noinput &&
-      gunicorn aiu_backend.wsgi:application --bind 0.0.0.0:8000
+      echo 'Creating superuser if not exists...' &&
+      python manage.py shell -c \"from django.contrib.auth import get_user_model; User = get_user_model(); User.objects.filter(username='admin').exists() or User.objects.create_superuser('admin', 'admin@aiu.edu.my', 'admin123')\" &&
+      echo 'Starting Gunicorn server with optimized settings...' &&
+      gunicorn aiu_backend.wsgi:application \
+        --bind 0.0.0.0:8000 \
+        --workers 8 \
+        --threads 4 \
+        --worker-class gthread \
+        --worker-connections 1000 \
+        --max-requests 1000 \
+        --max-requests-jitter 50 \
+        --timeout 120 \
+        --keep-alive 5
     "
     environment:
       MYSQL_HOST: db
@@ -38,8 +73,9 @@ services:
       MYSQL_USER: ${MYSQL_USER:-aiu}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiu123}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-this-in-production}
-      DEBUG: ${DEBUG:-True}
+      DEBUG: ${DEBUG:-False}
       DJANGO_SETTINGS_MODULE: aiu_backend.settings
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
     depends_on:
       db:
         condition: service_healthy
@@ -48,20 +84,56 @@ services:
     volumes:
       - ./media:/app/media
       - ./staticfiles:/app/staticfiles
+    networks:
+      - aiu_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/" || "exit 1"]
+      timeout: 5s
+      retries: 5
+      interval: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
     restart: always
     container_name: aiu_frontend
     depends_on:
-      - backend
+      backend:
+        condition: service_started
     ports:
       - "80:80"
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      - "443:443"
+    networks:
+      - aiu_network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80" || "exit 1"]
+      timeout: 5s
+      retries: 3
+      interval: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
 volumes:
   mysql_data:
     driver: local
+
+networks:
+  aiu_network:
+    driver: bridge
