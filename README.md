@@ -2,9 +2,6 @@
 
 A comprehensive web-based platform for managing lab bookings, equipment rentals, CV generation, and educational tutorials for Albukhary International University.
 
-> **🎉 NEW: System Optimized for High Performance!**  
-> The system is now optimized to handle 100-500+ concurrent students. See [READY_TO_DEPLOY.md](READY_TO_DEPLOY.md) for complete details.
-
 ## 🚀 Quick Deployment (5 Minutes)
 
 ### Prerequisites
@@ -17,38 +14,43 @@ A comprehensive web-based platform for managing lab bookings, equipment rentals,
 
 #### Windows
 ```cmd
-1. Open Command Prompt or PowerShell
-2. Navigate to project folder: cd path\to\aiu_media_hub
-3. Run: deploy.bat
-4. Wait 2-3 minutes
-5. Open browser: http://localhost
+deploy.bat
 ```
 
 #### Mac/Linux
 ```bash
-1. Open Terminal
-2. Navigate to project folder: cd path/to/aiu_media_hub
-3. Make script executable: chmod +x deploy.sh
-4. Run: ./deploy.sh
-5. Wait 2-3 minutes
-6. Open browser: http://localhost
+chmod +x deploy.sh
+./deploy.sh
 ```
+
+### Access Your System
+- Frontend: http://localhost
+- Admin Panel: http://localhost:8000/admin
+- Login: admin / admin123
+
+**⚠️ IMPORTANT: Change default passwords in production!**
 
 ## 📋 What Gets Deployed
 
 ### Services
-- **MySQL Database** (Port 3306) - Data storage
-- **Django Backend** (Port 8000) - REST API and admin panel
-- **React Frontend** (Port 80) - User interface
+- **MySQL Database** (Port 3306) - Optimized with 500 max connections
+- **Django Backend** (Port 8000) - 8 Gunicorn workers with threading
+- **React Frontend** (Port 80) - Nginx with caching
+
+### Performance
+- **Capacity**: 100-200 concurrent students (scalable to 500+)
+- **Response Time**: < 200ms for API calls
+- **Workers**: 8 Gunicorn workers × 4 threads = 32 concurrent requests
 
 ### Features
-- ✅ Automatic database setup
-- ✅ Auto-created admin user
-- ✅ Lab booking system
+- ✅ Automatic database setup and migrations
+- ✅ Auto-created admin user (admin/admin123)
+- ✅ Lab booking system with iMac selection
 - ✅ Equipment rental management
 - ✅ CV generator with templates
 - ✅ Tutorial video library
 - ✅ Admin dashboard with analytics
+- ✅ System usage tracking and Excel export
 
 ## 🔑 Default Credentials
 
@@ -57,7 +59,6 @@ A comprehensive web-based platform for managing lab bookings, equipment rentals,
 URL: http://localhost:8000/admin
 Username: admin
 Password: admin123
-Email: admin@aiu.edu.my
 ```
 
 ### MySQL Database
@@ -66,9 +67,10 @@ Host: localhost:3306
 Database: aiu_mediahub
 User: aiu
 Password: aiu123
+Root Password: root123
 ```
 
-**⚠️ IMPORTANT: Change these passwords in production!**
+**⚠️ CRITICAL: Change these passwords before production deployment!**
 
 ## 📖 Detailed Deployment Guide
 
@@ -79,32 +81,26 @@ Password: aiu123
 3. Verify installation:
    ```bash
    docker --version
-   docker-compose --version
+   docker compose version
    ```
 
 ### Step 2: Get the Project
 
-#### Option A: Clone from Git
+Clone from Git or copy the project folder to your system:
 ```bash
 git clone <repository-url>
 cd aiu_media_hub
 ```
 
-#### Option B: Copy Project Folder
-```bash
-# Copy the entire aiu_media_hub folder to your system
-cd aiu_media_hub
-```
-
 ### Step 3: Configure Environment (Optional)
 
-The project works with default settings, but you can customize:
+The project works with default settings. To customize:
 
 ```bash
 # Copy environment template
 cp .env.example .env
 
-# Edit .env file to customize settings
+# Edit .env file to customize:
 # - Database passwords
 # - Django secret key
 # - Debug mode
@@ -113,41 +109,38 @@ cp .env.example .env
 
 ### Step 4: Deploy
 
-#### Automated Deployment (Recommended)
+**Automated Deployment (Recommended):**
 
-**Windows:**
+Windows:
 ```cmd
 deploy.bat
 ```
 
-**Mac/Linux:**
+Mac/Linux:
 ```bash
 chmod +x deploy.sh
 ./deploy.sh
 ```
 
-#### Manual Deployment
+**Manual Deployment:**
 
 ```bash
-# Create environment file
-cp .env.example .env
-
 # Build and start all services
-docker-compose up -d --build
+docker compose up -d --build
 
 # Check status
-docker-compose ps
+docker compose ps
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ### Step 5: Verify Deployment
 
-1. **Check all containers are running:**
+1. **Check containers:**
    ```bash
-   docker-compose ps
-   # All should show "Up"
+   docker compose ps
+   # All should show "Up (healthy)"
    ```
 
 2. **Access the application:**
@@ -473,13 +466,12 @@ The system is optimized to handle many concurrent students:
 
 ### Current Configuration
 - **8 Gunicorn workers** with 4 threads each (32 concurrent requests)
-- **500 MySQL connections** with optimized buffer pool
+- **500 MySQL connections** with query caching
 - **Resource limits** for all containers
-- **Query caching** enabled
 
 ### Capacity
 - **100-200 concurrent students** with default settings
-- **500+ students** with recommended hardware
+- **500+ students** with recommended hardware (16GB RAM, 8 CPU cores)
 
 ### Monitor Performance
 
@@ -509,7 +501,11 @@ backend:
         memory: 8G     # Increase RAM
 ```
 
-See **PERFORMANCE_OPTIMIZATION.md** for detailed tuning guide.
+Then restart:
+```bash
+docker compose down
+docker compose up -d --build
+```
 
 ## 📊 Features
 
@@ -539,17 +535,10 @@ See **PERFORMANCE_OPTIMIZATION.md** for detailed tuning guide.
 | Admin Panel | http://localhost:8000/admin | Django admin interface |
 | MySQL | localhost:3306 | Database (internal) |
 
-## 📚 Additional Documentation
+## 📚 Documentation
 
-For more detailed information, see:
-
-- **QUICK_REFERENCE.md** - Quick reference card for common commands
-- **PERFORMANCE_OPTIMIZATION.md** - Complete performance tuning guide for high loads
-- **OPTIMIZATION_SUMMARY.md** - Summary of performance optimizations
-- **DOCKER_DEPLOYMENT_GUIDE.md** - Complete deployment guide with troubleshooting
-- **DOCKER_README.md** - Quick reference for Docker commands
-- **DEPLOYMENT_CHECKLIST.md** - Step-by-step deployment checklist
-- **DOCKER_ARCHITECTURE.md** - System architecture and diagrams
+- **[README.md](README.md)** - This file - Complete deployment and usage guide
+- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Quick command reference for daily operations
 
 ## 🆘 Getting Help
 
