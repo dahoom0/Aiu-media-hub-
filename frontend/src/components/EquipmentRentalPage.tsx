@@ -78,8 +78,9 @@ type MyRentalItem = {
 export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
   const { theme } = useTheme();
 
-  // Backend origin for media URLs (baseURL is /api but media is served from root)
-  const BACKEND_ORIGIN = 'http://localhost:8000';
+  // Backend origin for media URLs - use relative path in production
+  const isDevelopment = import.meta.env.DEV;
+  const BACKEND_ORIGIN = isDevelopment ? `http://${window.location.hostname}:8000` : '';
 
   const resolveMediaUrl = (src?: string) => {
     if (!src) return '';

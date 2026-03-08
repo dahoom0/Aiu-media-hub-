@@ -1,13 +1,15 @@
 // src/services/apiClient.js
 import axios from 'axios';
 
-// ✅ If you open frontend from phone using http://172.16.xx.xx:5173,
-// then hostname becomes 172.16.xx.xx and backend becomes http://172.16.xx.xx:8000
-// If you open frontend on laptop using http://localhost:5173,
-// backend becomes http://localhost:8000
+// ✅ In Docker/production: use relative URLs (nginx will proxy to backend)
+// ✅ In development: use localhost with port
+const isDevelopment = import.meta.env.DEV;
 const HOST = window.location.hostname;
-const BACKEND = `http://${HOST}:8000`;
-const API_BASE = `${BACKEND}/api`;
+
+// If in development mode, use explicit backend URL
+// If in production (Docker), use relative URL (nginx proxies /api to backend)
+const API_BASE = isDevelopment ? `http://${HOST}:8000/api` : '/api';
+const BACKEND = isDevelopment ? `http://${HOST}:8000` : '';
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -84,3 +86,4 @@ api.interceptors.response.use(
 );
 
 export default api;
+export { BACKEND, API_BASE };

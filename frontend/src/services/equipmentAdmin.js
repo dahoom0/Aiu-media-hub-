@@ -21,13 +21,17 @@ const RENTALS_BASE = '/equipment-rentals/';
 const CATEGORY_BASE = '/equipment-categories/';
 
 const getApiOrigin = () => {
-  const base = api.defaults.baseURL || 'http://localhost:8000/api';
+  // In production (Docker), use relative URLs; in dev, use explicit backend
+  const isDev = import.meta.env.DEV;
+  if (!isDev) return ''; // Production: relative URLs
+  
+  const base = api.defaults.baseURL || `http://${window.location.hostname}:8000/api`;
   return base.replace(/\/api\/?$/, '');
 };
 
 const normalizeImageUrl = (val) => {
   if (!val) return '';
-  const ORIGIN = getApiOrigin() || 'http://localhost:8000';
+  const ORIGIN = getApiOrigin();
 
   const s = typeof val === 'string' ? val : (val?.url || '');
   if (!s) return '';

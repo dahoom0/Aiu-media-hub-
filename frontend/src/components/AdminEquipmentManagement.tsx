@@ -29,8 +29,9 @@ import api from '../services/apiClient';
 // CONSTANTS - API configuration and endpoints
 // ============================================================================
 
-// Base URL for API endpoints (backend server origin)
-const API_ORIGIN = 'http://localhost:8000';
+// Base URL for API endpoints - use relative path in production
+const isDevelopment = import.meta.env.DEV;
+const API_ORIGIN = isDevelopment ? `http://${window.location.hostname}:8000` : '';
 
 // ============================================================================
 // UTILITY FUNCTIONS - Helper methods for data transformation
