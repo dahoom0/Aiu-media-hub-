@@ -326,13 +326,14 @@ export function AdminLabManagement() {
 
     try {
       setLoading(true);
-      await labAdminService.updateLab(editingLab.id, {
+      const response = await labAdminService.updateLab(editingLab.id, {
         name: newLabName,
         capacity: Number(newLabCapacity),
         description: newLabDescription || '',
         location: newLabLocation,
         facilities: newLabFacilities || ''
       });
+      console.log('Update response:', response);
       toast.success('Lab updated successfully!');
       setNewLabName('');
       setNewLabCapacity('');
@@ -343,6 +344,7 @@ export function AdminLabManagement() {
       setIsEditLabDialogOpen(false);
       await loadAll();
     } catch (e: any) {
+      console.error('Update error:', e);
       toast.error(getErrMsg(e) || 'Failed to update lab');
     } finally {
       setLoading(false);
