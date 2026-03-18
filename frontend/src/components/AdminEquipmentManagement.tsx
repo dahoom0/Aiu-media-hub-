@@ -615,7 +615,7 @@ export function AdminEquipmentManagement({
       setIsAddCategoryDialogOpen(false);
       
       // Reload categories
-      await loadCategories();
+      await fetchCategories();
       
       // Auto-select the new category
       if (response.data?.id) {
