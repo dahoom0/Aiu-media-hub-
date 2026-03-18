@@ -1,0 +1,154 @@
+/* Admin Panel Responsive Styles */
+
+/* Mobile-first approach */
+@media (max-width: 640px) {
+  /* Tables - horizontal scroll on mobile */
+  table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Reduce padding on mobile */
+  .admin-container {
+    padding: 0.75rem !important;
+  }
+
+  /* Stack buttons vertically on mobile */
+  .admin-actions {
+    flex-direction: column !important;
+    width: 100%;
+  }
+
+  .admin-actions button {
+    width: 100%;
+  }
+
+  /* Make cards full width */
+  .admin-card {
+    margin-left: -0.75rem;
+    margin-right: -0.75rem;
+    border-radius: 0;
+  }
+
+  /* Reduce font sizes slightly */
+  .admin-title {
+    font-size: 1.25rem !important;
+  }
+
+  /* Make dialogs scrollable and fit screen */
+  [role="dialog"] {
+    max-width: 95vw !important;
+    max-height: 90vh !important;
+    margin: 1rem !important;
+    overflow-y: auto !important;
+  }
+
+  /* Dialog content scrollable */
+  [role="dialog"] > div {
+    max-height: calc(90vh - 4rem) !important;
+    overflow-y: auto !important;
+  }
+
+  /* Stack form fields */
+  .form-grid-2 {
+    grid-template-columns: 1fr !important;
+  }
+
+  .form-grid-3 {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Tablet */
+@media (min-width: 641px) and (max-width: 1024px) {
+  /* 2-column grid on tablet */
+  .form-grid-3 {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  /* Reduce padding slightly */
+  .admin-container {
+    padding: 1rem !important;
+  }
+
+  /* Dialogs on tablet */
+  [role="dialog"] {
+    max-width: 90vw !important;
+    max-height: 85vh !important;
+    overflow-y: auto !important;
+  }
+}
+
+/* Desktop */
+@media (min-width: 1025px) {
+  .admin-container {
+    padding: 1.5rem !important;
+  }
+
+  /* Dialogs on desktop */
+  [role="dialog"] {
+    max-height: 90vh !important;
+    overflow-y: auto !important;
+  }
+}
+
+/* Table responsive wrapper */
+.table-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -0.75rem;
+}
+
+@media (min-width: 640px) {
+  .table-responsive {
+    margin: 0;
+  }
+}
+
+/* Hide table columns on mobile */
+@media (max-width: 640px) {
+  .hide-mobile {
+    display: none !important;
+  }
+}
+
+/* Responsive image containers */
+.image-preview {
+  width: 100%;
+  max-width: 8rem;
+  height: 8rem;
+}
+
+@media (max-width: 640px) {
+  .image-preview {
+    max-width: 6rem;
+    height: 6rem;
+  }
+}
+
+/* Fix dialog scrolling */
+.dialog-content-scrollable {
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Ensure dialogs don't overflow */
+[data-radix-dialog-content] {
+  max-height: 90vh !important;
+  overflow-y: auto !important;
+}
+
+/* Category checkboxes container */
+.category-list-container {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+@media (max-width: 640px) {
+  .category-list-container {
+    max-height: 200px;
+  }
+}

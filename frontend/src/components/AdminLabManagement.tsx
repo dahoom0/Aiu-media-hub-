@@ -13,6 +13,7 @@ import { Plus, Edit, Trash2, CheckCircle2, XCircle, FileDown } from 'lucide-reac
 import { toast } from 'sonner';
 
 import labAdminService from '../services/labAdminService';
+import '../styles/admin-responsive.css';
 
 // --- Interfaces ---
 interface Lab {

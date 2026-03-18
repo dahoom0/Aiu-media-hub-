@@ -25,6 +25,9 @@ import { toast } from 'sonner';
 // API client for making HTTP requests to the backend
 import api from '../services/apiClient';
 
+// Responsive styles
+import '../styles/admin-responsive.css';
+
 // ============================================================================
 // CONSTANTS - API configuration and endpoints
 // ============================================================================
@@ -1034,7 +1037,7 @@ export function AdminEquipmentManagement({
   // RENDER - Main component UI structure
   // ============================================================================
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-4 md:p-6 space-y-4 md:space-y-6 max-w-full overflow-x-hidden">
       {/* ====== RENTAL REJECTION DIALOG ====== */}
       <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
         <DialogContent className={`${dialogFitClass} max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
@@ -1184,7 +1187,7 @@ export function AdminEquipmentManagement({
               </Button>
             </DialogTrigger>
 
-            <DialogContent className={`${dialogFitClass} ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+            <DialogContent className={`dialog-content-scrollable ${dialogFitClass} ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
               <DialogHeader>
                 <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Add New Equipment</DialogTitle>
                 <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
@@ -1192,7 +1195,7 @@ export function AdminEquipmentManagement({
                 </DialogDescription>
               </DialogHeader>
 
-              <div className="space-y-4 py-4">
+              <div className="space-y-4 py-4 overflow-y-auto">
                 <div>
                   <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Equipment Image</Label>
                   <div className="mt-2 flex items-center gap-4">
@@ -1222,7 +1225,7 @@ export function AdminEquipmentManagement({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Equipment Name *</Label>
                     <Input
@@ -1247,7 +1250,7 @@ export function AdminEquipmentManagement({
                 {/* ✅ Inventory fields */}
                 <div>
                   <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Inventory *</Label>
-                  <div className="grid grid-cols-3 gap-4 mt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-2">
                     <div>
                       <Label className={theme === 'light' ? 'text-gray-700' : 'text-gray-300'}>Total</Label>
                       <Input
@@ -1316,7 +1319,7 @@ export function AdminEquipmentManagement({
                     </Button>
                   </div>
 
-                  <div className={`mt-2 p-4 rounded-lg border ${theme === 'light' ? 'bg-gray-50 border-gray-200' : 'bg-gray-800 border-gray-700'}`}>
+                  <div className={`mt-2 p-4 rounded-lg border category-list-container ${theme === 'light' ? 'bg-gray-50 border-gray-200' : 'bg-gray-800 border-gray-700'}`}>
                     {categories.length === 0 ? (
                       <div className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
                         No categories found. Click "New Category" to create one.
@@ -1701,7 +1704,7 @@ export function AdminEquipmentManagement({
 
       {/* ====== EDIT EQUIPMENT DIALOG ====== */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className={`${dialogFitClass} ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+        <DialogContent className={`dialog-content-scrollable ${dialogFitClass} ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
           <DialogHeader>
             <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Edit Equipment</DialogTitle>
             <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
