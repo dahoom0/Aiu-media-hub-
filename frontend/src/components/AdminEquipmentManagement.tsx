@@ -24,6 +24,7 @@ import { toast } from 'sonner';
 
 // API client for making HTTP requests to the backend
 import api from '../services/apiClient';
+import equipmentAdmin from '../services/equipmentAdmin';
 
 // Responsive styles
 import '../styles/admin-responsive.css';
@@ -129,6 +130,38 @@ type EquipmentCategoryRow = {
   id: number;
   name: string;
   created_at?: string;
+};
+
+/**
+ * Represents a bundle request item (individual equipment in a bundle)
+ */
+type BundleRequestItem = {
+  id: number;
+  equipment?: number | { id?: number; name?: string; equipment_id?: string };
+  equipment_name?: string;
+  equipment_id?: string;
+  quantity?: number;
+  duration_days?: number;
+  status?: StatusString;
+  notes?: string;
+  reject_reason?: string;
+  reviewed_by?: any;
+  reviewed_at?: string;
+};
+
+/**
+ * Represents a bundle request (multiple equipment items in one request)
+ */
+type BundleRequest = {
+  id: number;
+  student_name?: string;
+  student_id?: string;
+  student_email?: string;
+  status?: StatusString | 'partial';
+  notes?: string;
+  items?: BundleRequestItem[];
+  created_at?: string;
+  updated_at?: string;
 };
 
 /**
@@ -287,6 +320,11 @@ export function AdminEquipmentManagement({
   const [rejectTargetId, setRejectTargetId] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState('');
 
+  // ✅ NEW: Return approval dialog state
+  const [isReturnApprovalDialogOpen, setIsReturnApprovalDialogOpen] = useState(false);
+  const [returnApprovalTargetId, setReturnApprovalTargetId] = useState<number | null>(null);
+  const [returnRemark, setReturnRemark] = useState('');
+
   // Status change dialog state
   const [isStatusDialogOpen, setIsStatusDialogOpen] = useState(false);
   const [statusChangeTarget, setStatusChangeTarget] = useState<{ id: string; status: EquipmentUI['status']; item: EquipmentUI } | null>(null);
@@ -324,6 +362,14 @@ export function AdminEquipmentManagement({
   const [rentals, setRentals] = useState<EquipmentRentalRow[]>([]);
   const [rentalsLoading, setRentalsLoading] = useState(false);
   const [rentalActionLoading, setRentalActionLoading] = useState<Record<number, 'approve' | 'reject' | null>>({});
+
+  // ✅ Bundle request data
+  const [bundleRequests, setBundleRequests] = useState<BundleRequest[]>([]);
+  const [bundleLoading, setBundleLoading] = useState(false);
+  const [bundleItemActionLoading, setBundleItemActionLoading] = useState<Record<number, 'approve' | 'reject' | null>>({});
+  const [bundleItemRejectDialogOpen, setBundleItemRejectDialogOpen] = useState(false);
+  const [bundleItemRejectTarget, setBundleItemRejectTarget] = useState<{ requestId: number; itemId: number } | null>(null);
+  const [bundleItemRejectReason, setBundleItemRejectReason] = useState('');
 
   // Category management state
   const [isAddCategoryDialogOpen, setIsAddCategoryDialogOpen] = useState(false);
@@ -423,10 +469,18 @@ export function AdminEquipmentManagement({
   // Rental request status summary statistics
   const rentalStats = useMemo(() => {
     const pending = rentals.filter(r => safeStatus(r.status) === 'pending').length;
+    const pendingReturn = rentals.filter(r => safeStatus(r.status) === 'pending_return').length;
     const active = rentals.filter(r => safeStatus(r.status) === 'active' || safeStatus(r.status) === 'approved').length;
     const returned = rentals.filter(r => safeStatus(r.status) === 'returned').length;
-    return { pending, active, returned };
+    return { pending, pendingReturn, active, returned };
   }, [rentals]);
+
+  // ✅ Bundle request statistics
+  const bundleStats = useMemo(() => {
+    const pending = bundleRequests.filter(r => safeStatus(r.status) === 'pending').length;
+    const partial = bundleRequests.filter(r => safeStatus(r.status) === 'partial').length;
+    return { pending, partial };
+  }, [bundleRequests]);
 
   // ============================================================================
   // DATA FETCHING - Backend API calls for all data
@@ -482,10 +536,28 @@ export function AdminEquipmentManagement({
   };
 
   /**
-   * Refreshes all data from the backend (categories, equipment, rentals)
+   * ✅ Fetches all bundle requests (multiple equipment items in one request)
+   */
+  const fetchBundleRequests = async () => {
+    setBundleLoading(true);
+    try {
+      const data = await equipmentAdmin.listBundleRequests();
+      const list = normalizeList(data) as BundleRequest[];
+      setBundleRequests(list);
+    } catch (err: any) {
+      console.error(err);
+      toast.error('Failed to load bundle requests');
+      setBundleRequests([]);
+    } finally {
+      setBundleLoading(false);
+    }
+  };
+
+  /**
+   * Refreshes all data from the backend (categories, equipment, rentals, bundles)
    */
   const refreshAll = async () => {
-    await Promise.all([fetchCategories(), fetchEquipment(), fetchRentals()]);
+    await Promise.all([fetchCategories(), fetchEquipment(), fetchRentals(), fetchBundleRequests()]);
   };
 
   // ============================================================================
@@ -912,6 +984,123 @@ export function AdminEquipmentManagement({
     setRejectReason('');
   };
 
+  // ✅ NEW: Return approval handlers
+  /**
+   * Opens return approval dialog for pending return requests
+   */
+  const openReturnApprovalDialog = (rentalId: number) => {
+    setReturnApprovalTargetId(rentalId);
+    setReturnRemark('');
+    setIsReturnApprovalDialogOpen(true);
+  };
+
+  /**
+   * Approves equipment return with admin remark
+   */
+  const confirmReturnApproval = async () => {
+    const id = returnApprovalTargetId;
+    const remark = returnRemark.trim();
+
+    if (!id) return;
+
+    setRentalActionLoading(prev => ({ ...prev, [id]: 'approve' }));
+    try {
+      await api.post(`${RENTALS_BASE}${id}/approve_return/`, { remark });
+      toast.success('Return approved!');
+      await fetchRentals();
+      await fetchEquipment();
+      setIsReturnApprovalDialogOpen(false);
+      setReturnApprovalTargetId(null);
+      setReturnRemark('');
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.response?.data?.detail || 'Failed to approve return');
+    } finally {
+      setRentalActionLoading(prev => ({ ...prev, [id]: null }));
+    }
+  };
+
+  /**
+   * Rejects equipment return (student must resubmit)
+   */
+  const rejectReturn = async (rentalId: number, reason: string) => {
+    setRentalActionLoading(prev => ({ ...prev, [rentalId]: 'reject' }));
+    try {
+      // ✅ Use reject_return endpoint
+      await api.post(`${RENTALS_BASE}${rentalId}/reject_return/`, { 
+        reason: reason 
+      });
+      toast.success('Return rejected - student must resubmit');
+      await fetchRentals();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.response?.data?.detail || 'Failed to reject return');
+    } finally {
+      setRentalActionLoading(prev => ({ ...prev, [rentalId]: null }));
+    }
+  };
+
+  // ============================================================================
+  // BUNDLE REQUEST MANAGEMENT - Approve/reject individual items in bundle
+  // ============================================================================
+  
+  /**
+   * Approves a single item in a bundle request
+   */
+  const approveBundleItem = async (requestId: number, itemId: number) => {
+    setBundleItemActionLoading(prev => ({ ...prev, [itemId]: 'approve' }));
+    try {
+      await equipmentAdmin.approveBundleItem(requestId, itemId);
+      toast.success('Item approved!');
+      await fetchBundleRequests();
+      await fetchEquipment();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.response?.data?.detail || 'Failed to approve item');
+    } finally {
+      setBundleItemActionLoading(prev => ({ ...prev, [itemId]: null }));
+    }
+  };
+
+  /**
+   * Opens rejection dialog for a bundle item
+   */
+  const openBundleItemRejectDialog = (requestId: number, itemId: number) => {
+    setBundleItemRejectTarget({ requestId, itemId });
+    setBundleItemRejectReason('');
+    setBundleItemRejectDialogOpen(true);
+  };
+
+  /**
+   * Confirms and submits bundle item rejection
+   */
+  const confirmBundleItemReject = async () => {
+    if (!bundleItemRejectTarget) return;
+    
+    const reason = bundleItemRejectReason.trim();
+    if (!reason) {
+      toast.error('Please provide a rejection reason');
+      return;
+    }
+
+    const { requestId, itemId } = bundleItemRejectTarget;
+    setBundleItemActionLoading(prev => ({ ...prev, [itemId]: 'reject' }));
+    
+    try {
+      await equipmentAdmin.rejectBundleItem(requestId, itemId, reason);
+      toast.success('Item rejected!');
+      await fetchBundleRequests();
+      setBundleItemRejectDialogOpen(false);
+      setBundleItemRejectTarget(null);
+      setBundleItemRejectReason('');
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.response?.data?.detail || 'Failed to reject item');
+    } finally {
+      setBundleItemActionLoading(prev => ({ ...prev, [itemId]: null }));
+    }
+  };
+
   // ============================================================================
   // DATA EXPORT - CSV download functionality
   // ============================================================================
@@ -1005,6 +1194,12 @@ export function AdminEquipmentManagement({
    * Filters and memoizes pending rental requests for performance
    */
   const pendingRentals = useMemo(() => rentals.filter(r => safeStatus(r.status) === 'pending'), [rentals]);
+  
+  /**
+   * ✅ NEW: Filters pending return requests (student returned, waiting admin approval)
+   */
+  const pendingReturns = useMemo(() => rentals.filter(r => safeStatus(r.status) === 'pending_return'), [rentals]);
+  
   /**
    * Filters and memoizes active/approved rental requests for performance
    */
@@ -1047,13 +1242,62 @@ export function AdminEquipmentManagement({
   // ============================================================================
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-4 md:space-y-6 max-w-full overflow-x-hidden">
+      {/* ====== RETURN APPROVAL DIALOG ====== */}
+      <Dialog open={isReturnApprovalDialogOpen} onOpenChange={setIsReturnApprovalDialogOpen}>
+        <DialogContent className={`${dialogFitClass} max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+          <DialogHeader>
+            <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Approve Equipment Return</DialogTitle>
+            <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+              Check the equipment condition and add a remark before approving the return.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Admin Remark (optional)</Label>
+            <Textarea
+              value={returnRemark}
+              onChange={(e) => setReturnRemark(e.target.value)}
+              rows={4}
+              placeholder="e.g. Equipment in good condition / Minor scratches noted / All accessories returned..."
+              className={`${theme === 'light'
+                ? 'bg-gray-50 border-gray-200 text-gray-900'
+                : 'bg-gray-800 border-gray-700 text-white'
+                }`}
+            />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsReturnApprovalDialogOpen(false)}
+              className={theme === 'light' ? 'border-gray-200' : 'border-gray-700'}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmReturnApproval}
+              className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+              disabled={returnApprovalTargetId == null || rentalsLoading}
+            >
+              Approve Return
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* ====== RENTAL REJECTION DIALOG ====== */}
       <Dialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
         <DialogContent className={`${dialogFitClass} max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
           <DialogHeader>
-            <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Reject Request</DialogTitle>
+            <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
+              {rejectTargetId && rentals.find(r => r.id === rejectTargetId)?.status === 'pending_return' 
+                ? 'Reject Return Request' 
+                : 'Reject Rental Request'}
+            </DialogTitle>
             <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
-              Write a short reason for rejection (this will be saved in the backend).
+              {rejectTargetId && rentals.find(r => r.id === rejectTargetId)?.status === 'pending_return'
+                ? 'Student must resubmit the equipment. Write a reason for rejection.'
+                : 'Write a short reason for rejection (this will be saved in the backend).'}
             </DialogDescription>
           </DialogHeader>
 
@@ -1063,7 +1307,7 @@ export function AdminEquipmentManagement({
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
               rows={4}
-              placeholder="e.g. Equipment not available / Missing student ID / Not eligible..."
+              placeholder="e.g. Equipment not available / Missing student ID / Equipment damaged / Not properly returned..."
               className={`${theme === 'light'
                 ? 'bg-gray-50 border-gray-200 text-gray-900'
                 : 'bg-gray-800 border-gray-700 text-white'
@@ -1080,7 +1324,29 @@ export function AdminEquipmentManagement({
               Cancel
             </Button>
             <Button
-              onClick={confirmReject}
+              onClick={async () => {
+                const id = rejectTargetId;
+                const reason = rejectReason.trim();
+
+                if (!id) return;
+                if (!reason) {
+                  toast.error('Please write the reject reason');
+                  return;
+                }
+
+                const rental = rentals.find(r => r.id === id);
+                if (rental?.status === 'pending_return') {
+                  // Reject return request
+                  await rejectReturn(id, reason);
+                } else {
+                  // Reject rental request
+                  await rejectRental(id, reason);
+                }
+
+                setIsRejectDialogOpen(false);
+                setRejectTargetId(null);
+                setRejectReason('');
+              }}
               className="bg-red-500 hover:bg-red-600 text-white"
               disabled={rejectTargetId == null || rentalsLoading}
             >
@@ -1150,6 +1416,49 @@ export function AdminEquipmentManagement({
               className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
             >
               Confirm
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ====== BUNDLE ITEM REJECTION DIALOG ====== */}
+      <Dialog open={bundleItemRejectDialogOpen} onOpenChange={setBundleItemRejectDialogOpen}>
+        <DialogContent className={`${dialogFitClass} max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+          <DialogHeader>
+            <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Reject Bundle Item</DialogTitle>
+            <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+              Provide a reason for rejecting this item from the bundle request
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Rejection Reason *</Label>
+            <Textarea
+              value={bundleItemRejectReason}
+              onChange={(e) => setBundleItemRejectReason(e.target.value)}
+              rows={4}
+              placeholder="e.g. Equipment not available / Insufficient quantity / Equipment under maintenance..."
+              className={`${theme === 'light'
+                ? 'bg-gray-50 border-gray-200 text-gray-900'
+                : 'bg-gray-800 border-gray-700 text-white'
+                }`}
+            />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setBundleItemRejectDialogOpen(false)}
+              className={theme === 'light' ? 'border-gray-200' : 'border-gray-700'}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmBundleItemReject}
+              className="bg-red-500 hover:bg-red-600 text-white"
+              disabled={!bundleItemRejectReason.trim()}
+            >
+              Confirm Reject
             </Button>
           </div>
         </DialogContent>
@@ -1407,6 +1716,9 @@ export function AdminEquipmentManagement({
               <div className={`text-xs px-2 py-1 rounded border ${getRentalStatusBadge('pending')}`}>
                 {rentalStats.pending} Pending
               </div>
+              <div className={`text-xs px-2 py-1 rounded border ${getRentalStatusBadge('pending_return')}`}>
+                {rentalStats.pendingReturn} Return Requests
+              </div>
               <div className={`text-xs px-2 py-1 rounded border ${getRentalStatusBadge('active')}`}>
                 {rentalStats.active} Active
               </div>
@@ -1418,6 +1730,99 @@ export function AdminEquipmentManagement({
         </CardHeader>
 
         <CardContent className="space-y-6">
+          {/* --- Pending Return Requests Table (NEW) --- */}
+          {pendingReturns.length > 0 && (
+            <div className="space-y-3">
+              <div className={`text-sm flex items-center gap-2 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
+                <CheckCircle2 className="h-4 w-4 text-blue-400" />
+                Return Requests (Student Returned - Awaiting Approval)
+              </div>
+
+              <Table>
+                <TableHeader>
+                  <TableRow className={theme === 'light' ? 'border-gray-200' : 'border-gray-800'}>
+                    <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Student</TableHead>
+                    <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Equipment</TableHead>
+                    <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Returned At</TableHead>
+                    <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Status</TableHead>
+                    <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody>
+                  {pendingReturns.map((r) => {
+                    const rowLoading = rentalActionLoading[r.id] !== null && rentalActionLoading[r.id] !== undefined;
+
+                    return (
+                      <TableRow key={r.id} className={theme === 'light' ? 'border-gray-200' : 'border-gray-800'}>
+                        <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
+                          <div className="space-y-1">
+                            <Button
+                              variant="link"
+                              className="h-auto p-0 text-left justify-start"
+                              onClick={() => handleOpenStudentProfile(r.student_id)}
+                            >
+                              {r.student_name || 'Student'}
+                            </Button>
+                            <div className={`text-xs ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                              {r.student_id || '—'}
+                            </div>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
+                          <div className="space-y-1">
+                            <div>{r.equipment_name || (typeof r.equipment === 'object' ? r.equipment?.name : 'Equipment') || 'Equipment'}</div>
+                            <div className={`text-xs ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                              {r.equipment_id || (typeof r.equipment === 'object' ? r.equipment?.equipment_id : '') || ''}
+                            </div>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
+                          <div className="text-xs">
+                            {safeTime(r.actual_return_date || r.updated_at)}
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className={`inline-flex text-xs px-2 py-1 rounded border ${getRentalStatusBadge('pending_return')}`}>
+                            Return Request
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                              disabled={rentalsLoading || rowLoading}
+                              onClick={() => openRejectDialog(r.id)}
+                            >
+                              <XCircle className="h-3 w-3 mr-1" />
+                              Reject
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+                              disabled={rentalsLoading || rowLoading}
+                              onClick={() => openReturnApprovalDialog(r.id)}
+                            >
+                              <CheckCircle2 className="h-3 w-3 mr-1" />
+                              Approve Return
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
           {/* --- Pending Rental Requests Table --- */}
           <div className="space-y-3">
             <div className={`text-sm flex items-center gap-2 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
@@ -1602,6 +2007,150 @@ export function AdminEquipmentManagement({
           </div>
         </CardContent>
       </Card>
+
+      {/* ====== BUNDLE REQUESTS SECTION ====== */}
+      {bundleRequests.length > 0 && (
+        <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Bundle Requests</CardTitle>
+                <CardDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+                  Students requesting multiple equipment items (approve/reject each item individually)
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`text-xs px-2 py-1 rounded border ${getRentalStatusBadge('pending')}`}>
+                  {bundleStats.pending} Pending
+                </div>
+                {bundleStats.partial > 0 && (
+                  <div className={`text-xs px-2 py-1 rounded border bg-purple-500/20 text-purple-400 border-purple-500/50`}>
+                    {bundleStats.partial} Partial
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+
+          <CardContent className="space-y-6">
+            {bundleRequests.map((bundle) => {
+              const bundleStatus = safeStatus(bundle.status);
+              const hasPendingItems = bundle.items?.some(item => safeStatus(item.status) === 'pending');
+              
+              // Only show bundles with pending items
+              if (!hasPendingItems) return null;
+
+              return (
+                <div
+                  key={bundle.id}
+                  className={`p-4 rounded-lg border ${
+                    theme === 'light' ? 'bg-gray-50 border-gray-200' : 'bg-gray-800/50 border-gray-700'
+                  }`}
+                >
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className={`font-medium ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
+                          Bundle Request #{bundle.id}
+                        </h3>
+                        <div className={`text-xs px-2 py-1 rounded border ${getRentalStatusBadge(bundleStatus)}`}>
+                          {bundleStatus}
+                        </div>
+                      </div>
+                      <div className={`text-sm mt-1 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                        <Button
+                          variant="link"
+                          className="h-auto p-0 text-left justify-start"
+                          onClick={() => handleOpenStudentProfile(bundle.student_id)}
+                        >
+                          {bundle.student_name || 'Student'}
+                        </Button>
+                        <span className="mx-1">•</span>
+                        {bundle.student_email || '—'}
+                      </div>
+                      {bundle.notes && (
+                        <div className={`text-xs mt-2 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                          Notes: {bundle.notes}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    {bundle.items?.map((item) => {
+                      const itemStatus = safeStatus(item.status);
+                      const itemLoading = bundleItemActionLoading[item.id] !== null && bundleItemActionLoading[item.id] !== undefined;
+                      
+                      return (
+                        <div
+                          key={item.id}
+                          className={`flex items-center justify-between p-3 rounded border ${
+                            theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-700'
+                          }`}
+                        >
+                          <div className="flex-1">
+                            <div className={`font-medium ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
+                              {item.equipment_name || (typeof item.equipment === 'object' ? item.equipment?.name : 'Equipment')}
+                            </div>
+                            <div className={`text-xs ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                              ID: {item.equipment_id || (typeof item.equipment === 'object' ? item.equipment?.equipment_id : '—')}
+                              {' • '}
+                              Qty: {item.quantity || 1}
+                              {' • '}
+                              Duration: {item.duration_days || 1} days
+                            </div>
+                            {item.notes && (
+                              <div className={`text-xs mt-1 ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
+                                {item.notes}
+                              </div>
+                            )}
+                            {item.reject_reason && (
+                              <div className="text-xs mt-1 text-red-400">
+                                Rejected: {item.reject_reason}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <div className={`text-xs px-2 py-1 rounded border ${getRentalStatusBadge(itemStatus)}`}>
+                              {itemStatus}
+                            </div>
+                            
+                            {itemStatus === 'pending' && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                                  disabled={bundleLoading || itemLoading}
+                                  onClick={() => openBundleItemRejectDialog(bundle.id, item.id)}
+                                >
+                                  <XCircle className="h-3 w-3 mr-1" />
+                                  Reject
+                                </Button>
+
+                                <Button
+                                  size="sm"
+                                  className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+                                  disabled={bundleLoading || itemLoading}
+                                  onClick={() => approveBundleItem(bundle.id, item.id)}
+                                >
+                                  <CheckCircle2 className="h-3 w-3 mr-1" />
+                                  Approve
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }).filter(Boolean)}
+          </CardContent>
+        </Card>
+      )}
 
       {/* ====== EQUIPMENT INVENTORY TABLE ====== */}
       <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>

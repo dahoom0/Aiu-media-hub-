@@ -511,6 +511,12 @@ export function AdminLabManagement() {
 
   const memoLabs = useMemo(() => labs, [labs]);
   const memoRequests = useMemo(() => bookingRequests, [bookingRequests]);
+  
+  // ✅ Calculate pending requests count
+  const pendingCount = useMemo(() => 
+    bookingRequests.filter(req => String(req.status).toLowerCase() === 'pending').length, 
+    [bookingRequests]
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -596,8 +602,15 @@ export function AdminLabManagement() {
         <TabsContent value="requests" className="space-y-6">
           <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
             <CardHeader>
-              <CardTitle>Booking Requests</CardTitle>
-              <CardDescription>Review student applications</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Booking Requests</CardTitle>
+                  <CardDescription>Review student applications</CardDescription>
+                </div>
+                <div className={`text-xs px-3 py-1 rounded border ${getStatusColor('pending')}`}>
+                  {pendingCount} Pending
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <Table>

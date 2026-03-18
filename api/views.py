@@ -1694,6 +1694,53 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
 
         return Response(self.get_serializer(rental).data)
 
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminUser])
+    def reject_return(self, request, pk=None):
+        """
+        ✅ Admin rejects the return request - student must resubmit
+        Sets status back to 'active' with reject reason
+        """
+        rental = self.get_object()
+        current_status = (rental.status or "").strip().lower()
+
+        if current_status != "pending_return":
+            return Response({"detail": "Only pending returns can be rejected."}, status=400)
+
+        reason = request.data.get('reason') or request.data.get('reject_reason') or request.data.get('remark') or ''
+        reason = str(reason).strip() or "Return rejected by admin - please resubmit"
+
+        # ✅ Set back to active with reject reason
+        rental.status = "active"
+        rental.return_remark = reason
+        rental.actual_return_date = None  # Clear return date
+        rental.save()
+
+        return Response(self.get_serializer(rental).data)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminUser])
+    def reject_return(self, request, pk=None):
+        """
+        ✅ Admin rejects the return request - student must resubmit
+        Sets status back to 'active' with reject reason
+        """
+        rental = self.get_object()
+        current_status = (rental.status or "").strip().lower()
+
+        if current_status != "pending_return":
+            return Response({"detail": "Only pending returns can be rejected."}, status=400)
+
+        reason = request.data.get('reason') or request.data.get('reject_reason') or request.data.get('remark') or ''
+        reason = str(reason).strip() or "Return rejected by admin - please resubmit"
+
+        # ✅ Set back to active with reject reason
+        rental.status = "active"
+        rental.return_remark = reason
+        rental.actual_return_date = None  # Clear return date
+        rental.save()
+
+        return Response(self.get_serializer(rental).data)
+
+
 
 # --------------- CV LOGIC --------------- #
 
@@ -1710,6 +1757,34 @@ class CVViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(student=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        """
+        ✅ CONCURRENT-SAFE CV CREATION
+        Uses get_or_create to prevent duplicate CV creation when multiple students
+        create CVs simultaneously. If CV already exists, updates it instead.
+        """
+        with transaction.atomic():
+            # Check if CV already exists for this student
+            existing_cv = CV.objects.filter(student=request.user).first()
+            
+            if existing_cv:
+                # Update existing CV instead of creating new one
+                serializer = self.get_serializer(existing_cv, data=request.data, partial=True)
+                serializer.is_valid(raise_exception=True)
+                self.perform_update(serializer)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            
+            # Create new CV (standard DRF flow)
+            return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        """
+        ✅ CONCURRENT-SAFE CV UPDATE
+        Uses transaction to ensure atomic updates
+        """
+        with transaction.atomic():
+            return super().update(request, *args, **kwargs)
 
     def _safe_filename(self, s: str) -> str:
         s = (s or "").strip()

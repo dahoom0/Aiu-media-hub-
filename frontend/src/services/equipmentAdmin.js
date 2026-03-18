@@ -363,6 +363,32 @@ const equipmentAdmin = {
     const res = await api.post(`${RENTALS_BASE}${id}/approve_return/`, payload);
     return res.data;
   },
+
+  // ✅ NEW: Reject equipment return (student must resubmit)
+  rejectReturn: async (id, reason) => {
+    const payload = { reason: reason || 'Return rejected by admin - please resubmit' };
+    const res = await api.post(`${RENTALS_BASE}${id}/reject_return/`, payload);
+    return res.data;
+  },
+
+  // -------------------------
+  // BUNDLE REQUESTS (EquipmentRequest)
+  // -------------------------
+  listBundleRequests: async () => {
+    const res = await api.get('/equipment-requests/');
+    return res.data;
+  },
+
+  approveBundleItem: async (requestId, itemId) => {
+    const res = await api.post(`/equipment-requests/${requestId}/items/${itemId}/approve/`);
+    return res.data;
+  },
+
+  rejectBundleItem: async (requestId, itemId, reason) => {
+    const payload = { reason: reason || 'Rejected by admin' };
+    const res = await api.post(`/equipment-requests/${requestId}/items/${itemId}/reject/`, payload);
+    return res.data;
+  },
 };
 
 export default equipmentAdmin;
