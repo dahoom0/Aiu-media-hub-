@@ -200,10 +200,10 @@ class TutorialProgress(models.Model):
 class Lab(models.Model):
     """Lab facilities"""
     name = models.CharField(max_length=100)
-    description = models.TextField()
+    description = models.TextField(blank=True, default='')
     capacity = models.IntegerField()
     location = models.CharField(max_length=255)
-    facilities = models.TextField(help_text='Comma-separated list of facilities')
+    facilities = models.TextField(blank=True, default='', help_text='Comma-separated list of facilities')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
