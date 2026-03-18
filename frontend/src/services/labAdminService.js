@@ -88,6 +88,17 @@ const labAdminService = {
     return res.data;
   },
 
+  updateLab: async (id, { name, capacity, description, location, facilities }) => {
+    const res = await api.put(`/labs/${id}/`, {
+      name,
+      capacity,
+      description: description || '',
+      location: location || '',
+      facilities: facilities || ''
+    });
+    return res.data;
+  },
+
   deleteLab: async (id) => {
     const res = await api.delete(`/labs/${id}/`);
     return res.data;

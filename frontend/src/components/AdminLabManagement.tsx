@@ -199,6 +199,10 @@ export function AdminLabManagement() {
   const [newLabLocation, setNewLabLocation] = useState('');
   const [newLabFacilities, setNewLabFacilities] = useState('');
 
+  // Edit States
+  const [isEditLabDialogOpen, setIsEditLabDialogOpen] = useState(false);
+  const [editingLab, setEditingLab] = useState<Lab | null>(null);
+
   // Data States
   const [labs, setLabs] = useState<Lab[]>([]);
   const [pcs, setPcs] = useState<PC[]>([]);
@@ -305,14 +309,44 @@ export function AdminLabManagement() {
 
   const handleEditLab = (lab: Lab) => {
     // Set form fields with lab data
+    setEditingLab(lab);
     setNewLabName(lab.name);
     setNewLabCapacity(String(lab.capacity));
     setNewLabDescription(''); // Backend doesn't return these fields yet
     setNewLabLocation('');
     setNewLabFacilities('');
-    
-    // TODO: Implement edit functionality
-    toast.info('Edit functionality coming soon');
+    setIsEditLabDialogOpen(true);
+  };
+
+  const handleUpdateLab = async () => {
+    if (!editingLab || !newLabName || !newLabCapacity || !newLabLocation) {
+      toast.error('Please fill in all required fields (Name, Capacity, Location)');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await labAdminService.updateLab(editingLab.id, {
+        name: newLabName,
+        capacity: Number(newLabCapacity),
+        description: newLabDescription || '',
+        location: newLabLocation,
+        facilities: newLabFacilities || ''
+      });
+      toast.success('Lab updated successfully!');
+      setNewLabName('');
+      setNewLabCapacity('');
+      setNewLabDescription('');
+      setNewLabLocation('');
+      setNewLabFacilities('');
+      setEditingLab(null);
+      setIsEditLabDialogOpen(false);
+      await loadAll();
+    } catch (e: any) {
+      toast.error(getErrMsg(e) || 'Failed to update lab');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDeleteLab = async (lab: Lab) => {
@@ -739,6 +773,63 @@ export function AdminLabManagement() {
             </Button>
             <Button onClick={handleAddLab} className="bg-teal-500 text-white" disabled={loading}>
               Create Lab
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* EDIT LAB DIALOG */}
+      <Dialog open={isEditLabDialogOpen} onOpenChange={setIsEditLabDialogOpen}>
+        <DialogContent className={theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}>
+          <DialogHeader>
+            <DialogTitle>Edit Lab</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Lab Name *</Label>
+              <Input value={newLabName} onChange={(e) => setNewLabName(e.target.value)} placeholder="e.g. Media Lab 1" />
+            </div>
+            <div className="space-y-2">
+              <Label>Capacity *</Label>
+              <Input
+                type="number"
+                value={newLabCapacity}
+                onChange={(e) => setNewLabCapacity(e.target.value)}
+                placeholder="30"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Location *</Label>
+              <Input 
+                value={newLabLocation} 
+                onChange={(e) => setNewLabLocation(e.target.value)} 
+                placeholder="e.g. Building A, Floor 2" 
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Textarea 
+                value={newLabDescription} 
+                onChange={(e) => setNewLabDescription(e.target.value)} 
+                placeholder="Brief description of the lab"
+                rows={3}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Facilities</Label>
+              <Input 
+                value={newLabFacilities} 
+                onChange={(e) => setNewLabFacilities(e.target.value)} 
+                placeholder="e.g. iMacs, Projector, Whiteboard" 
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsEditLabDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleUpdateLab} className="bg-teal-500 text-white" disabled={loading}>
+              Update Lab
             </Button>
           </div>
         </DialogContent>
