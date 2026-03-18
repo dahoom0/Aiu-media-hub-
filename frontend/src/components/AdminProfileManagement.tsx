@@ -136,13 +136,21 @@ export function AdminProfileManagement({
 
     const load = async () => {
       try {
+        console.log('[AdminProfileManagement] Starting to fetch profiles...');
+        
         const [studentsRes, adminsRes] = await Promise.all([
           adminProfileManagementService.getStudentProfiles(),
           adminProfileManagementService.getAdminProfiles()
         ]);
 
+        console.log('[AdminProfileManagement] Students response:', studentsRes.data);
+        console.log('[AdminProfileManagement] Admins response:', adminsRes.data);
+
         const studentRawList = extractList<BackendStudentProfile>(studentsRes.data as BackendList<BackendStudentProfile>);
         const adminRawList = extractList<BackendAdminProfile>(adminsRes.data as BackendList<BackendAdminProfile>);
+
+        console.log('[AdminProfileManagement] Student raw list length:', studentRawList.length);
+        console.log('[AdminProfileManagement] Admin raw list length:', adminRawList.length);
 
         // ✅ FIX: Do NOT drop profiles just because phone/program/year is empty.
         // Only "student_id" and "user.email" and "full_name" are essential for list rendering.
@@ -195,43 +203,58 @@ export function AdminProfileManagement({
 
             const user = p.user || undefined;
 
+            // ✅ More lenient: allow missing admin_id (use email as fallback)
             const adminId = p.admin_id ? String(p.admin_id) : '';
             const email = user?.email ? String(user.email) : '';
             const name = p.full_name ? String(p.full_name) : '';
 
-            if (!adminId || !email || !name) {
-              console.warn('Skipping admin profile due to missing required fields (full_name/admin_id/user.email):', p);
+            // ✅ Only require email (most critical field)
+            if (!email) {
+              console.warn('[AdminProfileManagement] Skipping admin profile due to missing email:', p);
               return null;
             }
+
+            // ✅ Use email as fallback for admin_id if missing
+            const finalAdminId = adminId || email.split('@')[0];
+            
+            // ✅ Use email username as fallback for name if missing
+            const finalName = name || email.split('@')[0];
 
             const roleValue =
               typeof p.role === 'string'
                 ? p.role
                 : typeof p.position === 'string'
                   ? p.position
-                  : '';
+                  : 'Administrator';
 
             const status = String(p.status || '').toLowerCase();
             const normalizedStatus: 'active' | 'inactive' = status === 'inactive' ? 'inactive' : 'active';
 
+            console.log('[AdminProfileManagement] Mapping admin:', { finalAdminId, finalName, email, roleValue });
+
             return {
-              id: String(p.id ?? adminId),
-              name,
+              id: String(p.id ?? finalAdminId),
+              name: finalName,
               email,
               phone: user?.phone ? String(user.phone) : '',
-              adminId,
-              role: roleValue || '',
+              adminId: finalAdminId,
+              role: roleValue,
               status: normalizedStatus,
               profilePicture: user?.profile_picture || undefined
             };
           })
           .filter(Boolean) as Admin[];
 
+        console.log('[AdminProfileManagement] Mapped students count:', mappedStudents.length);
+        console.log('[AdminProfileManagement] Mapped admins count:', mappedAdmins.length);
+        console.log('[AdminProfileManagement] Mapped admins:', mappedAdmins);
+
         if (!isMounted) return;
         setStudents(mappedStudents);
         setAdmins(mappedAdmins);
       } catch (err) {
-        console.error('Failed to load profiles:', err);
+        console.error('[AdminProfileManagement] Failed to load profiles:', err);
+        console.error('[AdminProfileManagement] Error details:', err.response?.data || err.message);
         if (!isMounted) return;
         setStudents([]);
         setAdmins([]);

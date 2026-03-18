@@ -33,7 +33,7 @@ import '../styles/admin-responsive.css';
 // ============================================================================
 
 // Base URL for API endpoints - use relative path in production
-const isDevelopment = import.meta.env.DEV;
+const isDevelopment = (import.meta as any).env?.DEV || false;
 const API_ORIGIN = isDevelopment ? `http://${window.location.hostname}:8000` : '';
 
 // ============================================================================
@@ -83,6 +83,7 @@ type StatusString =
   | 'approved' // Status when the request has been approved
   | 'rejected' // Status when the request has been rejected
   | 'active'   // Status when the equipment is actively in use
+  | 'pending_return' // ✅ NEW: Student returned, waiting admin approval
   | 'returned' // Status when the equipment has been returned
   | 'cancelled'; // Status when the request has been cancelled
 
@@ -110,6 +111,12 @@ type EquipmentRentalRow = {
 
   notes?: string;
   reject_reason?: string;
+
+  // ✅ NEW: Return approval fields
+  return_remark?: string;
+  return_approved_by?: any;
+  return_approved_at?: string;
+  actual_return_date?: string;
 
   created_at?: string;
   updated_at?: string;
@@ -979,8 +986,10 @@ export function AdminEquipmentManagement({
     const s = safeStatus(status);
     if (s === 'pending') return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
     if (s === 'approved' || s === 'active') return 'bg-teal-500/20 text-teal-400 border-teal-500/50';
-    if (s === 'returned') return 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50';
+    if (s === 'pending_return') return 'bg-blue-500/20 text-blue-400 border-blue-500/50';
+    if (s === 'returned') return 'bg-green-500/20 text-green-400 border-green-500/50';
     if (s === 'rejected') return 'bg-red-500/20 text-red-400 border-red-500/50';
+    if (s === 'overdue') return 'bg-orange-500/20 text-orange-400 border-orange-500/50';
     return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
   };
 
@@ -1156,6 +1165,15 @@ export function AdminEquipmentManagement({
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => onNavigate?.('admin-equipment-history')}
+            className={theme === 'light' ? 'border-gray-200' : 'border-gray-700'}
+          >
+            <Clock className="h-4 w-4 mr-2" />
+            View History
+          </Button>
+
           <Button
             variant="outline"
             onClick={exportInventoryCsv}
@@ -1512,6 +1530,7 @@ export function AdminEquipmentManagement({
                   <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Period</TableHead>
                   <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Reviewed</TableHead>
                   <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Status</TableHead>
+                  <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Remark</TableHead>
                 </TableRow>
               </TableHeader>
 
@@ -1562,12 +1581,18 @@ export function AdminEquipmentManagement({
                         {String(r.status || '')}
                       </div>
                     </TableCell>
+
+                    <TableCell className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+                      <div className="text-xs max-w-xs truncate" title={r.return_remark || r.reject_reason || ''}>
+                        {r.return_remark || r.reject_reason || '—'}
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
 
                 {!rentalsLoading && activeRentals.length === 0 && (
                   <TableRow className={theme === 'light' ? 'border-gray-200' : 'border-gray-800'}>
-                    <TableCell colSpan={5} className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+                    <TableCell colSpan={6} className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
                       No active rentals right now.
                     </TableCell>
                   </TableRow>

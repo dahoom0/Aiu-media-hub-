@@ -356,6 +356,13 @@ const equipmentAdmin = {
     const res = await api.post(`${RENTALS_BASE}${id}/reject/`, payload);
     return res.data;
   },
+
+  // ✅ NEW: Approve equipment return with remark
+  approveReturn: async (id, remark) => {
+    const payload = { remark: remark || '' };
+    const res = await api.post(`${RENTALS_BASE}${id}/approve_return/`, payload);
+    return res.data;
+  },
 };
 
 export default equipmentAdmin;

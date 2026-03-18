@@ -272,6 +272,55 @@ class AdminProfileViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return AdminProfile.objects.select_related("user").all()
+    
+    def list(self, request, *args, **kwargs):
+        """
+        ✅ Return all admin users, even if they don't have AdminProfile records.
+        This ensures all admins are visible in the profile management page.
+        """
+        # Get all AdminProfile records
+        admin_profiles = AdminProfile.objects.select_related("user").all()
+        
+        # Get all admin users (user_type='admin' or is_staff=True)
+        admin_users = User.objects.filter(
+            Q(user_type='admin') | Q(is_staff=True)
+        ).distinct()
+        
+        # Create a set of user IDs that already have profiles
+        profile_user_ids = set(admin_profiles.values_list('user_id', flat=True))
+        
+        # Serialize existing profiles
+        serializer = self.get_serializer(admin_profiles, many=True)
+        results = list(serializer.data)
+        
+        # Add admin users without profiles
+        for user in admin_users:
+            if user.id not in profile_user_ids:
+                # Create a temporary profile-like object
+                results.append({
+                    'id': f'user-{user.id}',
+                    'user': {
+                        'id': user.id,
+                        'username': user.username,
+                        'email': user.email,
+                        'first_name': user.first_name,
+                        'last_name': user.last_name,
+                        'phone': user.phone,
+                        'profile_picture': user.profile_picture.url if user.profile_picture else None,
+                        'user_type': user.user_type,
+                        'is_staff': user.is_staff,
+                        'is_superuser': user.is_superuser,
+                    },
+                    'admin_id': user.username,
+                    'full_name': user.get_full_name() or user.username,
+                    'role': 'Administrator' if user.is_superuser else 'Staff',
+                    'status': 'active',
+                    'department': None,
+                    'created_at': user.created_at.isoformat() if user.created_at else None,
+                    'updated_at': user.updated_at.isoformat() if user.updated_at else None,
+                })
+        
+        return Response(results)
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -1580,24 +1629,67 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def return_item(self, request, pk=None):
+        """
+        ✅ Student initiates return - sets status to 'pending_return'
+        Admin must approve the return after checking the equipment
+        """
         rental = self.get_object()
         current_status = (rental.status or "").strip().lower()
 
+        # Only the student who rented can initiate return
+        if not _is_admin(request.user) and rental.student_id != request.user.id:
+            return Response({"detail": "Not allowed."}, status=403)
+
         if current_status == "returned":
             return Response({"message": "Already returned"})
+        
+        if current_status == "pending_return":
+            return Response({"message": "Return already pending admin approval"})
 
         if current_status not in ["approved", "overdue", "damaged", "active"]:
             return Response({"detail": "Only active/approved/overdue/damaged rentals can be returned."}, status=400)
 
-        rental.status = "returned"
+        # ✅ Set to pending_return instead of returned
+        rental.status = "pending_return"
         rental.actual_return_date = timezone.now()
+        rental.save()
+
+        return Response(self.get_serializer(rental).data)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminUser])
+    def approve_return(self, request, pk=None):
+        """
+        ✅ Admin approves the return after checking equipment condition
+        Accepts 'remark' in request body for admin comments
+        """
+        rental = self.get_object()
+        current_status = (rental.status or "").strip().lower()
+
+        if current_status == "returned":
+            return Response({"message": "Already approved and returned"})
+
+        if current_status != "pending_return":
+            return Response({"detail": "Only pending returns can be approved."}, status=400)
+
+        remark = request.data.get('remark', '').strip()
+
+        # ✅ Approve the return
+        rental.status = "returned"
+        rental.return_remark = remark
+        rental.return_approved_by = request.user
+        rental.return_approved_at = timezone.now()
         rental.returned_to = request.user
         rental.save()
 
+        # ✅ Sync equipment availability
         _equipment_sync(rental.equipment)
 
+        # ✅ Update student active rentals count
         if hasattr(rental.student, "student_profile"):
-            count = EquipmentRental.objects.filter(student=rental.student, status="approved").count()
+            count = EquipmentRental.objects.filter(
+                student=rental.student, 
+                status__in=["approved", "active", "pending_return"]
+            ).count()
             StudentProfile.objects.filter(user=rental.student).update(active_rentals=count)
 
         return Response(self.get_serializer(rental).data)

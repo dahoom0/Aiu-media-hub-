@@ -14,6 +14,7 @@ import { ChangePasswordPage } from './components/ChangePasswordPage';
 import { AdminTutorialManagement } from './components/AdminTutorialManagement';
 import { AdminLabManagement } from './components/AdminLabManagement';
 import { AdminEquipmentManagement } from './components/AdminEquipmentManagement';
+import { AdminEquipmentHistory } from './components/AdminEquipmentHistory';
 import { AdminCVReview } from './components/AdminCVReview';
 import { AdminProfileManagement } from './components/AdminProfileManagement';
 import { StudentCVView } from './components/StudentCVView';
@@ -41,6 +42,7 @@ type PageType =
   | 'admin-tutorials'
   | 'admin-labs'
   | 'admin-equipment'
+  | 'admin-equipment-history'
   | 'admin-cv-review'
   | 'admin-profiles'
   | 'student-cv-view';
@@ -73,6 +75,7 @@ function isValidPageType(p: string): p is PageType {
     'admin-tutorials',
     'admin-labs',
     'admin-equipment',
+    'admin-equipment-history',
     'admin-cv-review',
     'admin-profiles',
     'student-cv-view',
@@ -269,6 +272,13 @@ export default function App() {
         return (
           <DashboardLayout activePage="admin-equipment" onNavigate={handleNavigate} isAdmin={true}>
             <AdminEquipmentManagement onNavigate={handleNavigate} />
+          </DashboardLayout>
+        );
+
+      case 'admin-equipment-history':
+        return (
+          <DashboardLayout activePage="admin-equipment-history" onNavigate={handleNavigate} isAdmin={true}>
+            <AdminEquipmentHistory />
           </DashboardLayout>
         );
 

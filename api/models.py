@@ -119,13 +119,13 @@ class AdminProfile(models.Model):
     )
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='admin_profile')
-    admin_id = models.CharField(max_length=20, unique=True)
-    role = models.CharField(max_length=100)
+    admin_id = models.CharField(max_length=20, unique=True, db_index=True)
+    role = models.CharField(max_length=100, default='Administrator')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     department = models.CharField(max_length=100, blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'admin_profiles'
@@ -448,6 +448,7 @@ class EquipmentRental(models.Model):
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
         ('active', 'Active'),
+        ('pending_return', 'Pending Return'),  # ✅ NEW: Student returned, waiting admin approval
         ('returned', 'Returned'),
         ('overdue', 'Overdue'),
         ('damaged', 'Damaged'),
@@ -472,6 +473,11 @@ class EquipmentRental(models.Model):
     reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_rentals')
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reject_reason = models.TextField(blank=True, null=True)
+
+    # ✅ NEW: Return approval fields
+    return_remark = models.TextField(blank=True, null=True, help_text='Admin remark when checking returned equipment')
+    return_approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_returns')
+    return_approved_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

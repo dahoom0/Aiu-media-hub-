@@ -175,17 +175,35 @@ class RegisterSerializer(serializers.ModelSerializer):
         user_type = (getattr(user, "user_type", "") or "").strip().lower()
 
         if user_type == "student":
-            StudentProfile.objects.create(
-                user=user,
-                student_id=(student_id or "").strip(),
-                year=(year or "1"),
-            )
+            # ✅ CRITICAL FIX: Always create StudentProfile, use username as fallback for student_id
+            final_student_id = (student_id or "").strip() or user.username
+            final_year = (year or "").strip() or "1"
+            
+            try:
+                StudentProfile.objects.create(
+                    user=user,
+                    student_id=final_student_id,
+                    year=final_year,
+                )
+            except Exception as e:
+                # If student_id is duplicate, try with username + timestamp
+                import time
+                fallback_id = f"{user.username}_{int(time.time())}"
+                StudentProfile.objects.create(
+                    user=user,
+                    student_id=fallback_id,
+                    year=final_year,
+                )
         elif user_type == "admin":
-            # keep optional: only create if your project uses AdminProfile
+            # ✅ Always create AdminProfile for admin users
+            final_admin_id = user.username
+            final_role = (role or "").strip() or "Administrator"
+            
             try:
                 AdminProfile.objects.create(
                     user=user,
-                    role=(role or "").strip(),
+                    admin_id=final_admin_id,
+                    role=final_role,
                     department=(department or "").strip(),
                 )
             except Exception:

@@ -14,8 +14,11 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-change-this-in-prod
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-# Allow all hosts in Docker, specific hosts in production
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',') if os.getenv('ALLOWED_HOSTS') != '*' else ['*']
+# ✅ Allow all hosts in Docker for network access from any IP
+if os.getenv('DOCKER_ENV') == 'true':
+    ALLOWED_HOSTS = ['*']
+else:
+    ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',') if os.getenv('ALLOWED_HOSTS') != '*' else ['*']
 
 # Application definition
 INSTALLED_APPS = [
@@ -95,9 +98,18 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS Settings - Allow all origins in Docker, specific in production
+# CORS Settings - Allow all origins in Docker for network access
 if DEBUG or os.getenv('DOCKER_ENV') == 'true':
     CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOW_CREDENTIALS = True
+    # ✅ Allow requests from any origin in Docker
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^http://localhost:\d+$",
+        r"^http://127\.0\.0\.1:\d+$",
+        r"^http://192\.168\.\d+\.\d+:\d+$",
+        r"^http://10\.100\.10\.\d+:\d+$",
+        r"^http://.*$",  # Allow all HTTP origins in Docker
+    ]
 else:
     CORS_ALLOWED_ORIGINS = [
         "http://localhost:5173",
@@ -105,8 +117,7 @@ else:
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
-
-CORS_ALLOW_CREDENTIALS = True
+    CORS_ALLOW_CREDENTIALS = True
 
 # REST Framework Settings
 REST_FRAMEWORK = {

@@ -47,6 +47,8 @@ services:
       echo 'MySQL is ready!' &&
       echo 'Running migrations...' &&
       python manage.py migrate &&
+      echo 'Fixing missing profiles...' &&
+      python manage.py fix_missing_profiles &&
       echo 'Collecting static files...' &&
       python manage.py collectstatic --noinput &&
       echo 'Creating superuser if not exists...' &&
@@ -74,7 +76,9 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "8000:8000"  # Accessible from any network interface
+    expose:
+      - "8000"
     volumes:
       - ./media:/app/media
       - ./staticfiles:/app/staticfiles
@@ -106,8 +110,12 @@ services:
       backend:
         condition: service_started
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:80"      # HTTP - accessible from any network interface
+      - "443:443"    # HTTPS
+      - "3000:80"    # Alternative port for development
+    expose:
+      - "80"
+      - "443"
     networks:
       - aiu_network
     healthcheck:
