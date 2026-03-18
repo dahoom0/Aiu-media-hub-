@@ -1003,6 +1003,7 @@ export function AdminEquipmentManagement({
    * Opens force return dialog for active rentals
    */
   const openForceReturnDialog = (rentalId: number) => {
+    console.log('Opening force return dialog for rental:', rentalId);
     setForceReturnTargetId(rentalId);
     setForceReturnRemark('');
     setIsForceReturnDialogOpen(true);
@@ -1013,22 +1014,35 @@ export function AdminEquipmentManagement({
    */
   const confirmForceReturn = async () => {
     const id = forceReturnTargetId;
-    const remark = forceReturnRemark.trim() || 'Force returned by admin';
+    const remark = forceReturnRemark.trim();
 
-    if (!id) return;
+    console.log('Force return confirmation:', { id, remark });
+
+    if (!id) {
+      toast.error('No rental selected');
+      return;
+    }
+
+    if (!remark) {
+      toast.error('Please provide a remark explaining the force return');
+      return;
+    }
 
     setRentalActionLoading(prev => ({ ...prev, [id]: 'approve' }));
     try {
-      await api.post(`${RENTALS_BASE}${id}/force_return/`, { remark });
-      toast.success('Equipment force returned!');
+      console.log('Calling force_return API:', `${RENTALS_BASE}${id}/force_return/`);
+      const response = await api.post(`${RENTALS_BASE}${id}/force_return/`, { remark });
+      console.log('Force return response:', response.data);
+      toast.success('Equipment force returned successfully!');
       await fetchRentals();
       await fetchEquipment();
       setIsForceReturnDialogOpen(false);
       setForceReturnTargetId(null);
       setForceReturnRemark('');
     } catch (err: any) {
-      console.error(err);
-      toast.error(err?.response?.data?.detail || 'Failed to force return');
+      console.error('Force return error:', err);
+      const errorMsg = err?.response?.data?.detail || err?.response?.data?.error || err?.message || 'Failed to force return';
+      toast.error(errorMsg);
     } finally {
       setRentalActionLoading(prev => ({ ...prev, [id]: null }));
     }
@@ -1330,30 +1344,42 @@ export function AdminEquipmentManagement({
       <Dialog open={isForceReturnDialogOpen} onOpenChange={setIsForceReturnDialogOpen}>
         <DialogContent className={`${dialogFitClass} max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
           <DialogHeader>
-            <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Force Return Equipment</DialogTitle>
+            <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>⚠️ Force Return Equipment</DialogTitle>
             <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
-              Force return this equipment without student action (for overdue/lost scenarios). Add a remark explaining the reason.
+              Are you sure you want to force return this equipment? This will mark it as returned without student confirmation. Use this for overdue or lost equipment scenarios.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-2">
-            <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Admin Remark</Label>
-            <Textarea
-              value={forceReturnRemark}
-              onChange={(e) => setForceReturnRemark(e.target.value)}
-              rows={4}
-              placeholder="e.g. Equipment overdue - force returned / Student lost equipment / Equipment found in lab..."
-              className={`${theme === 'light'
-                ? 'bg-gray-50 border-gray-200 text-gray-900'
-                : 'bg-gray-800 border-gray-700 text-white'
-                }`}
-            />
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-orange-500/10 border border-orange-500/30">
+              <p className="text-sm text-orange-400 font-medium">⚠️ Warning</p>
+              <p className="text-xs text-gray-400 mt-1">
+                This action will immediately mark the equipment as returned and notify the student.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Admin Remark (Required)</Label>
+              <Textarea
+                value={forceReturnRemark}
+                onChange={(e) => setForceReturnRemark(e.target.value)}
+                rows={4}
+                placeholder="e.g. Equipment overdue - force returned / Student lost equipment / Equipment found in lab..."
+                className={`${theme === 'light'
+                  ? 'bg-gray-50 border-gray-200 text-gray-900'
+                  : 'bg-gray-800 border-gray-700 text-white'
+                  }`}
+              />
+            </div>
           </div>
 
           <div className="flex justify-end gap-2">
             <Button
               variant="outline"
-              onClick={() => setIsForceReturnDialogOpen(false)}
+              onClick={() => {
+                setIsForceReturnDialogOpen(false);
+                setForceReturnRemark('');
+              }}
               className={theme === 'light' ? 'border-gray-200' : 'border-gray-700'}
             >
               Cancel
@@ -1361,9 +1387,9 @@ export function AdminEquipmentManagement({
             <Button
               onClick={confirmForceReturn}
               className="bg-orange-500 hover:bg-orange-600 text-white"
-              disabled={forceReturnTargetId == null || rentalsLoading}
+              disabled={forceReturnTargetId == null || rentalsLoading || !forceReturnRemark.trim()}
             >
-              Force Return
+              Yes, Force Return
             </Button>
           </div>
         </DialogContent>
