@@ -19,8 +19,17 @@ const adminProfileManagementService = {
    * List all student profiles (admin only) or own profile (student)
    * GET /student-profiles/
    */
-  getStudentProfiles() {
-    return apiClient.get('/student-profiles/');
+  async getStudentProfiles() {
+    try {
+      console.log('[Profile Service] Fetching student profiles...');
+      const response = await apiClient.get('/student-profiles/');
+      console.log('[Profile Service] Student profiles fetched:', response.data);
+      console.log('[Profile Service] Student count:', Array.isArray(response.data) ? response.data.length : response.data?.count || response.data?.results?.length || 0);
+      return response;
+    } catch (error) {
+      console.error('[Profile Service] Failed to fetch student profiles:', error.response?.data || error.message);
+      throw error;
+    }
   },
 
   /**
@@ -61,8 +70,17 @@ const adminProfileManagementService = {
    * List all admin profiles (admin only)
    * GET /admin-profiles/
    */
-  getAdminProfiles() {
-    return apiClient.get('/admin-profiles/');
+  async getAdminProfiles() {
+    try {
+      console.log('[Profile Service] Fetching admin profiles...');
+      const response = await apiClient.get('/admin-profiles/');
+      console.log('[Profile Service] Admin profiles fetched:', response.data);
+      console.log('[Profile Service] Admin count:', Array.isArray(response.data) ? response.data.length : response.data?.count || response.data?.results?.length || 0);
+      return response;
+    } catch (error) {
+      console.error('[Profile Service] Failed to fetch admin profiles:', error.response?.data || error.message);
+      throw error;
+    }
   },
 
   /**

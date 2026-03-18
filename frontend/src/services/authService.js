@@ -5,14 +5,22 @@ const PROFILE_ENDPOINTS = ['/auth/profile/', '/profile/'];
 const REGISTER_ENDPOINT = '/auth/register/';
 
 const normalizeRoleToUserType = (obj) => {
-  if (obj?.user_type) return obj.user_type;
-  if (obj?.is_staff === true) return 'admin';
+  // Priority 1: Check user_type field directly
+  if (obj?.user_type === 'admin') return 'admin';
+  if (obj?.user_type === 'student') return 'student';
+  
+  // Priority 2: Check is_staff or is_superuser
+  if (obj?.is_staff === true || obj?.is_superuser === true) return 'admin';
+  
+  // Priority 3: Check profile objects
   if (obj?.admin_profile) return 'admin';
   if (obj?.student_profile) return 'student';
 
+  // Priority 4: Check role string
   const role = String(obj?.role || obj?.user_role || '').toLowerCase();
   if (role.includes('admin')) return 'admin';
 
+  // Default to student
   return 'student';
 };
 
@@ -154,7 +162,7 @@ const authService = {
 
   isAdmin: () => {
     const u = authService.getUser();
-    return u?.user_type === 'admin' || u?.is_staff === true;
+    return u?.user_type === 'admin' || u?.is_staff === true || u?.is_superuser === true;
   },
 };
 

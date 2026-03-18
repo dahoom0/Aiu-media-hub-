@@ -90,8 +90,10 @@ class UserSerializer(serializers.ModelSerializer):
             "user_type",
             "phone",
             "profile_picture",
+            "is_staff",
+            "is_superuser",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "is_staff", "is_superuser"]
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):

@@ -11,6 +11,11 @@ const HOST = window.location.hostname;
 const API_BASE = isDevelopment ? `http://${HOST}:8000/api` : '/api';
 const BACKEND = isDevelopment ? `http://${HOST}:8000` : '';
 
+console.log('[API Client] Environment:', isDevelopment ? 'DEVELOPMENT' : 'PRODUCTION');
+console.log('[API Client] API_BASE:', API_BASE);
+console.log('[API Client] BACKEND:', BACKEND);
+console.log('[API Client] Hostname:', HOST);
+
 const api = axios.create({
   baseURL: API_BASE,
   withCredentials: false,
@@ -18,6 +23,9 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
+    // Log all API requests
+    console.log(`[API Request] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
+    
     if (config.url && !config.url.endsWith('/') && !config.url.includes('?')) {
       config.url += '/';
     }
@@ -26,6 +34,9 @@ api.interceptors.request.use(
     if (token) {
       config.headers = config.headers || {};
       config.headers.Authorization = `Bearer ${token}`;
+      console.log('[API Request] Token attached:', token.substring(0, 20) + '...');
+    } else {
+      console.warn('[API Request] No token found in localStorage');
     }
 
     config.headers = config.headers || {};
@@ -35,7 +46,10 @@ api.interceptors.request.use(
 
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    console.error('[API Request Error]', error);
+    return Promise.reject(error);
+  }
 );
 
 function hardLogout() {
@@ -49,33 +63,49 @@ function hardLogout() {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Log successful responses
+    console.log(`[API Response] ${response.config.method?.toUpperCase()} ${response.config.url} - Status: ${response.status}`);
+    console.log('[API Response] Data:', response.data);
+    return response;
+  },
   async (error) => {
     const originalRequest = error.config;
 
+    // Log errors
+    console.error(`[API Error] ${originalRequest?.method?.toUpperCase()} ${originalRequest?.url}`);
+    console.error('[API Error] Status:', error.response?.status);
+    console.error('[API Error] Data:', error.response?.data);
+
     if (!error.response) {
       // network / refused connection / CORS
+      console.error('[API Error] Network error - no response from server');
       return Promise.reject(error);
     }
 
     if (error.response.status === 401 && !originalRequest._retry) {
+      console.log('[API Error] 401 Unauthorized - attempting token refresh');
       originalRequest._retry = true;
 
       const refresh = localStorage.getItem('refreshToken');
       if (!refresh) {
+        console.error('[API Error] No refresh token available - logging out');
         hardLogout();
         return Promise.reject(error);
       }
 
       try {
+        console.log('[API Error] Refreshing token...');
         const res = await axios.post(`${BACKEND}/api/token/refresh/`, { refresh });
         const newAccess = res.data.access;
 
         localStorage.setItem('accessToken', newAccess);
         originalRequest.headers.Authorization = `Bearer ${newAccess}`;
+        console.log('[API Error] Token refreshed successfully');
 
         return api(originalRequest);
       } catch (err) {
+        console.error('[API Error] Token refresh failed - logging out');
         hardLogout();
         return Promise.reject(err);
       }
