@@ -77,8 +77,14 @@ const labAdminService = {
     return normalizeList(res.data);
   },
 
-  createLab: async ({ name, capacity }) => {
-    const res = await api.post('/labs/', { name, capacity });
+  createLab: async ({ name, capacity, description, location, facilities }) => {
+    const res = await api.post('/labs/', { 
+      name, 
+      capacity,
+      description: description || '',
+      location: location || '',
+      facilities: facilities || ''
+    });
     return res.data;
   },
 
