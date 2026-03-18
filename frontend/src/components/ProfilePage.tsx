@@ -68,7 +68,22 @@ export function ProfilePage({ isAdmin = false, onNavigate }: ProfilePageProps) {
             merged.username ||
             '',
         );
-        setProfileImage(merged.profile_picture || null);
+        
+        // ✅ Normalize profile picture URL
+        const normalizeImageUrl = (url) => {
+          if (!url) return null;
+          if (url.startsWith('http://') || url.startsWith('https://')) return url;
+          
+          const isDev = import.meta.env.DEV;
+          const HOST = window.location.hostname;
+          const BACKEND = isDev ? `http://${HOST}:8000` : '';
+          
+          if (url.startsWith('/media/')) return `${BACKEND}${url}`;
+          if (url.startsWith('media/')) return `${BACKEND}/${url}`;
+          return `${BACKEND}/media/${url.replace(/^\/+/, '')}`;
+        };
+        
+        setProfileImage(normalizeImageUrl(merged.profile_picture));
       } catch (error) {
         console.error('Failed to load profile', error);
       } finally {
@@ -115,7 +130,23 @@ export function ProfilePage({ isAdmin = false, onNavigate }: ProfilePageProps) {
           merged.student_profile?.student_id ||
           studentId,
       );
-      setProfileImage(merged.profile_picture || profileImage);
+      
+      // ✅ Normalize profile picture URL after update
+      const normalizeImageUrl = (url) => {
+        if (!url) return null;
+        if (url.startsWith('http://') || url.startsWith('https://')) return url;
+        
+        const isDev = import.meta.env.DEV;
+        const HOST = window.location.hostname;
+        const BACKEND = isDev ? `http://${HOST}:8000` : '';
+        
+        if (url.startsWith('/media/')) return `${BACKEND}${url}`;
+        if (url.startsWith('media/')) return `${BACKEND}/${url}`;
+        return `${BACKEND}/media/${url.replace(/^\/+/, '')}`;
+      };
+      
+      setProfileImage(normalizeImageUrl(merged.profile_picture));
+      setProfileImageFile(null); // Clear the file after successful upload
 
       // fire event so DashboardLayout refreshes avatar + name
       window.dispatchEvent(new CustomEvent('profileUpdated'));

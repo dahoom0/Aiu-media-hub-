@@ -230,7 +230,8 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
               dueDate: r.expected_return_date
                 ? new Date(r.expected_return_date).toLocaleDateString()
                 : 'N/A',
-              status: norm(r?.status) || 'active'
+              status: norm(r?.status) || 'active',
+              return_remark: r.return_remark || ''
             };
             console.log('Mapped rental:', rental);
             return rental;
@@ -729,36 +730,52 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
                         </div>
                       </div>
                       {isPendingReturn ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="border-blue-500/50 text-blue-400"
-                          disabled
-                        >
-                          <Clock className="h-4 w-4 mr-1" />
-                          Awaiting Admin
-                        </Button>
+                        <div className="space-y-2 flex-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-blue-500/50 text-blue-400 w-full"
+                            disabled
+                          >
+                            <Clock className="h-4 w-4 mr-1" />
+                            Awaiting Admin Approval
+                          </Button>
+                          {rental.return_remark && (
+                            <div className="p-2 rounded bg-blue-500/10 border border-blue-500/30">
+                              <p className="text-xs text-blue-400 font-medium">Admin Note:</p>
+                              <p className="text-xs text-gray-300 mt-1">{rental.return_remark}</p>
+                            </div>
+                          )}
+                        </div>
                       ) : (
-                        <Button
-                          size="sm"
-                          className={`${
-                            isOverdue 
-                              ? 'bg-red-500 hover:bg-red-600' 
-                              : 'bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600'
-                          } text-white`}
-                          onClick={async () => {
-                            try {
-                              await equipmentService.returnItem(rental.id);
-                              // Refresh the page to show updated status
-                              window.location.reload();
-                            } catch (error: any) {
-                              console.error('Return request failed:', error);
-                              alert(error?.response?.data?.detail || 'Failed to request return');
-                            }
-                          }}
-                        >
-                          Request Return
-                        </Button>
+                        <div className="space-y-2 flex-1">
+                          <Button
+                            size="sm"
+                            className={`${
+                              isOverdue 
+                                ? 'bg-red-500 hover:bg-red-600' 
+                                : 'bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600'
+                            } text-white w-full`}
+                            onClick={async () => {
+                              try {
+                                await equipmentService.returnItem(rental.id);
+                                // Refresh the page to show updated status
+                                window.location.reload();
+                              } catch (error: any) {
+                                console.error('Return request failed:', error);
+                                alert(error?.response?.data?.detail || 'Failed to request return');
+                              }
+                            }}
+                          >
+                            Request Return
+                          </Button>
+                          {rental.return_remark && (
+                            <div className="p-2 rounded bg-red-500/10 border border-red-500/30">
+                              <p className="text-xs text-red-400 font-medium">⚠️ Previous Rejection:</p>
+                              <p className="text-xs text-gray-300 mt-1">{rental.return_remark}</p>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>

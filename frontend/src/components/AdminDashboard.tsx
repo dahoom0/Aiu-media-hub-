@@ -1020,6 +1020,10 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="bg-gray-900/50 border-gray-800">
+          <CardHeader>
+            <CardTitle className="text-white">Recent Activity</CardTitle>
+            <CardDescription className="text-gray-400">Latest system activities</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {recentActivity.map((activity: any) => (

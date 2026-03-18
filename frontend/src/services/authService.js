@@ -113,6 +113,32 @@ const authService = {
     throw lastErr;
   },
 
+  updateProfile: async (formData) => {
+    let lastErr = null;
+
+    for (const endpoint of PROFILE_ENDPOINTS) {
+      try {
+        const res = await api.patch(endpoint, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        const existing = JSON.parse(localStorage.getItem('user') || '{}');
+        const merged = { ...existing, ...(res.data || {}) };
+
+        merged.user_type = normalizeRoleToUserType(merged);
+        if (merged.is_staff === undefined) {
+          merged.is_staff = merged.user_type === 'admin';
+        }
+
+        localStorage.setItem('user', JSON.stringify(merged));
+        return merged;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    throw lastErr;
+  },
+
   // ---------------- PASSWORD RESET ----------------
 
   /**

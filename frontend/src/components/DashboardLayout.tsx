@@ -102,6 +102,19 @@ export function DashboardLayout({
   }, []);
 
   useEffect(() => {
+    const normalizeImageUrl = (url) => {
+      if (!url) return null;
+      if (url.startsWith('http://') || url.startsWith('https://')) return url;
+      
+      const isDev = import.meta.env.DEV;
+      const HOST = window.location.hostname;
+      const BACKEND = isDev ? `http://${HOST}:8000` : '';
+      
+      if (url.startsWith('/media/')) return `${BACKEND}${url}`;
+      if (url.startsWith('media/')) return `${BACKEND}/${url}`;
+      return `${BACKEND}/media/${url.replace(/^\/+/, '')}`;
+    };
+
     const loadUser = async () => {
       try {
         const merged = await authService.getProfile(); // GET /auth/profile/
@@ -118,7 +131,7 @@ export function DashboardLayout({
           name: fullName,
           email: merged.email || '',
           initials,
-          avatarUrl: merged.profile_picture || null,
+          avatarUrl: normalizeImageUrl(merged.profile_picture),
         });
       } catch (err) {
         console.error('Failed to load sidebar user', err);
@@ -126,6 +139,16 @@ export function DashboardLayout({
     };
 
     loadUser();
+
+    // ✅ Listen for profile updates
+    const handleProfileUpdate = () => {
+      loadUser();
+    };
+    window.addEventListener('profileUpdated', handleProfileUpdate);
+
+    return () => {
+      window.removeEventListener('profileUpdated', handleProfileUpdate);
+    };
   }, []);
 
   // Load notifications
