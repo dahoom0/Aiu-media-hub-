@@ -184,8 +184,8 @@ const equipmentService = {
     const data = response.data;
     const list = normalizeList(data);
     
-    // Filter for rentals that need to be returned (approved, active, overdue, damaged)
-    const activeStatuses = ['approved', 'active', 'overdue', 'damaged'];
+    // Filter for rentals that need to be returned (approved, active, overdue, damaged, pending_return)
+    const activeStatuses = ['approved', 'active', 'overdue', 'damaged', 'pending_return'];
     return list.filter(r => {
       const status = String(r?.status || '').toLowerCase().trim();
       return activeStatuses.includes(status);

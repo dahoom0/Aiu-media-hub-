@@ -208,7 +208,7 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
         // B) Rentals (active-like)
         const rList = Array.isArray(rentalsData) ? rentalsData : [];
         console.log('All rentals data:', rList);
-        const activeLikeStatuses = new Set(['approved', 'active', 'overdue', 'damaged']);
+        const activeLikeStatuses = new Set(['approved', 'active', 'overdue', 'damaged', 'pending_return']);
 
         const myRentals = rList
           .filter((r: any) => {
@@ -673,7 +673,7 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
               </Button>
             </div>
             <CardDescription className="text-gray-400">
-              Return your rented equipment before the due date
+              Request return for your rented equipment
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -682,9 +682,10 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
             ) : (
               activeRentals.map((rental) => {
                 const isOverdue = rental.status === 'overdue';
+                const isPendingReturn = rental.status === 'pending_return';
                 const dueDate = rental.dueDate !== 'N/A' ? new Date(rental.dueDate) : null;
                 const today = new Date();
-                const isDueSoon = dueDate && !isOverdue && (dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24) <= 2;
+                const isDueSoon = dueDate && !isOverdue && !isPendingReturn && (dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24) <= 2;
 
                 return (
                   <div
@@ -692,6 +693,8 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
                     className={`p-4 rounded-lg border ${
                       isOverdue 
                         ? 'bg-red-500/10 border-red-500/50' 
+                        : isPendingReturn
+                        ? 'bg-blue-500/10 border-blue-500/50'
                         : isDueSoon
                         ? 'bg-yellow-500/10 border-yellow-500/50'
                         : 'bg-gray-800/50 border-gray-700'
@@ -701,7 +704,11 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
                       <div className="space-y-1 flex-1">
                         <p className="text-white font-medium">{rental.equipment}</p>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <p className={`text-sm ${isOverdue ? 'text-red-400' : isDueSoon ? 'text-yellow-400' : 'text-gray-400'}`}>
+                          <p className={`text-sm ${
+                            isOverdue ? 'text-red-400' : 
+                            isPendingReturn ? 'text-blue-400' :
+                            isDueSoon ? 'text-yellow-400' : 'text-gray-400'
+                          }`}>
                             Due: {rental.dueDate}
                           </p>
                           {isOverdue && (
@@ -709,33 +716,50 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
                               OVERDUE
                             </Badge>
                           )}
-                          {isDueSoon && !isOverdue && (
+                          {isPendingReturn && (
+                            <Badge className="bg-blue-500/20 text-blue-400 text-xs">
+                              PENDING ADMIN APPROVAL
+                            </Badge>
+                          )}
+                          {isDueSoon && !isOverdue && !isPendingReturn && (
                             <Badge className="bg-yellow-500/20 text-yellow-400 text-xs">
                               DUE SOON
                             </Badge>
                           )}
                         </div>
                       </div>
-                      <Button
-                        size="sm"
-                        className={`${
-                          isOverdue 
-                            ? 'bg-red-500 hover:bg-red-600' 
-                            : 'bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600'
-                        } text-white`}
-                        onClick={async () => {
-                          try {
-                            await equipmentService.returnItem(rental.id);
-                            // Refresh the page to show updated status
-                            window.location.reload();
-                          } catch (error: any) {
-                            console.error('Return failed:', error);
-                            alert(error?.response?.data?.detail || 'Failed to return equipment');
-                          }
-                        }}
-                      >
-                        Return Now
-                      </Button>
+                      {isPendingReturn ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-blue-500/50 text-blue-400"
+                          disabled
+                        >
+                          <Clock className="h-4 w-4 mr-1" />
+                          Awaiting Admin
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          className={`${
+                            isOverdue 
+                              ? 'bg-red-500 hover:bg-red-600' 
+                              : 'bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600'
+                          } text-white`}
+                          onClick={async () => {
+                            try {
+                              await equipmentService.returnItem(rental.id);
+                              // Refresh the page to show updated status
+                              window.location.reload();
+                            } catch (error: any) {
+                              console.error('Return request failed:', error);
+                              alert(error?.response?.data?.detail || 'Failed to request return');
+                            }
+                          }}
+                        >
+                          Request Return
+                        </Button>
+                      )}
                     </div>
                   </div>
                 );
@@ -746,8 +770,8 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
               <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30 flex items-start gap-3">
                 <AlertCircle className="h-5 w-5 text-yellow-400 mt-0.5" />
                 <div>
-                  <p className="text-sm text-yellow-400">Return Reminder</p>
-                  <p className="text-xs text-gray-400">Return by due date to avoid penalties</p>
+                  <p className="text-sm text-yellow-400">Return Process</p>
+                  <p className="text-xs text-gray-400">Click "Request Return" → Admin checks equipment → You get notification</p>
                 </div>
               </div>
             )}
