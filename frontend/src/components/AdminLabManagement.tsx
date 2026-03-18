@@ -22,6 +22,9 @@ interface Lab {
   capacity: number;
   pcCount: number;
   status: 'available' | 'occupied' | 'maintenance' | string;
+  location?: string;
+  description?: string;
+  facilities?: string;
 }
 
 interface PC {
@@ -226,6 +229,9 @@ export function AdminLabManagement() {
         capacity: Number(l.capacity) || 0,
         pcCount: Number(l.pc_count ?? l.pcCount ?? l.pc_total ?? 0),
         status: l.status || 'available',
+        location: l.location || '',
+        description: l.description || '',
+        facilities: l.facilities || '',
       }));
       setLabs(mappedLabs);
 
@@ -312,9 +318,9 @@ export function AdminLabManagement() {
     setEditingLab(lab);
     setNewLabName(lab.name);
     setNewLabCapacity(String(lab.capacity));
-    setNewLabDescription(''); // Backend doesn't return these fields yet
-    setNewLabLocation('');
-    setNewLabFacilities('');
+    setNewLabDescription(lab.description || '');
+    setNewLabLocation(lab.location || '');
+    setNewLabFacilities(lab.facilities || '');
     setIsEditLabDialogOpen(true);
   };
 
