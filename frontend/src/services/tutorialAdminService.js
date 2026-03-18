@@ -176,7 +176,23 @@ const tutorialAdminService = {
   },
 
   async listCategories() {
-    return getFirstWorkingList(['/categories/', '/category/']);
+    try {
+      console.log('Fetching categories from backend...');
+      const res = await apiClient.get('/categories/', withAuthHeaders());
+      console.log('Categories response:', res.data);
+      const categories = unwrapList(res.data);
+      console.log('Unwrapped categories:', categories);
+      return categories;
+    } catch (error) {
+      console.error('Failed to fetch categories:', error);
+      console.error('Error response:', error.response?.data);
+      throw error;
+    }
+  },
+
+  async createCategory(data) {
+    const res = await apiClient.post('/categories/', data, withAuthHeaders());
+    return res.data;
   },
 
   async create(formData) {

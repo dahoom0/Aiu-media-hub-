@@ -113,6 +113,9 @@ export function AdminTutorialManagement() {
   const { theme } = useTheme();
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   const [uploadStep, setUploadStep] = useState<1 | 2 | 3>(1);
+  const [isAddCategoryDialogOpen, setIsAddCategoryDialogOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryColor, setNewCategoryColor] = useState('#3B82F6');
 
   const [editingTutorialId, setEditingTutorialId] = useState<string | number | null>(null);
 
@@ -163,10 +166,14 @@ export function AdminTutorialManagement() {
   const loadWizardData = async () => {
     setLoadingWizardData(true);
     try {
+      console.log('Loading wizard data (categories and equipment)...');
       const [cats, eqs] = await Promise.all([
         tutorialAdminService.listCategories(),
         tutorialAdminService.listEquipments(),
       ]);
+
+      console.log('Loaded categories:', cats);
+      console.log('Loaded equipment:', eqs);
 
       setCategories(cats);
       setEquipments(eqs);
@@ -176,9 +183,45 @@ export function AdminTutorialManagement() {
       }
     } catch (err) {
       console.error('Failed to load categories/equipments:', err);
-      toast.error('Failed to load categories/equipment from backend');
+      console.error('Error details:', err.response?.data);
+      toast.error(`Failed to load categories/equipment: ${err.message}`);
     } finally {
       setLoadingWizardData(false);
+    }
+  };
+
+  const handleAddCategory = async () => {
+    if (!newCategoryName.trim()) {
+      toast.error('Category name is required');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await tutorialAdminService.createCategory({
+        name: newCategoryName.trim(),
+        color: newCategoryColor,
+      });
+      
+      toast.success('Category created successfully');
+      setNewCategoryName('');
+      setNewCategoryColor('#3B82F6');
+      setIsAddCategoryDialogOpen(false);
+      
+      // Reload categories
+      const cats = await tutorialAdminService.listCategories();
+      setCategories(cats);
+      
+      // Auto-select the new category
+      if (response?.id) {
+        setTutorialCategoryId(String(response.id));
+      }
+    } catch (error: any) {
+      console.error('Failed to create category:', error);
+      const errorMsg = error.response?.data?.name?.[0] || error.message || 'Failed to create category';
+      toast.error(errorMsg);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -400,7 +443,67 @@ export function AdminTutorialManagement() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>Category</Label>
+                      <div className="flex items-center justify-between">
+                        <Label>Category</Label>
+                        <Dialog open={isAddCategoryDialogOpen} onOpenChange={setIsAddCategoryDialogOpen}>
+                          <DialogTrigger asChild>
+                            <Button 
+                              type="button" 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-6 text-xs"
+                              onClick={() => {
+                                setNewCategoryName('');
+                                setNewCategoryColor('#3B82F6');
+                              }}
+                            >
+                              + New Category
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className={`max-w-md ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+                            <DialogHeader>
+                              <DialogTitle>Create New Category</DialogTitle>
+                            </DialogHeader>
+                            <div className="space-y-4 py-4">
+                              <div className="space-y-2">
+                                <Label>Category Name</Label>
+                                <Input
+                                  value={newCategoryName}
+                                  onChange={(e) => setNewCategoryName(e.target.value)}
+                                  placeholder="e.g., Photography, Video Editing"
+                                  className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Color</Label>
+                                <div className="flex gap-2">
+                                  <Input
+                                    type="color"
+                                    value={newCategoryColor}
+                                    onChange={(e) => setNewCategoryColor(e.target.value)}
+                                    className="w-20 h-10"
+                                  />
+                                  <Input
+                                    type="text"
+                                    value={newCategoryColor}
+                                    onChange={(e) => setNewCategoryColor(e.target.value)}
+                                    placeholder="#3B82F6"
+                                    className={theme === 'dark' ? 'bg-gray-800 border-gray-700' : ''}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex justify-end gap-2">
+                              <Button variant="outline" onClick={() => setIsAddCategoryDialogOpen(false)}>
+                                Cancel
+                              </Button>
+                              <Button onClick={handleAddCategory} disabled={loading}>
+                                Create
+                              </Button>
+                            </div>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
                       <Select
                         value={tutorialCategoryId}
                         onValueChange={(v: any) => setTutorialCategoryId(v)}
