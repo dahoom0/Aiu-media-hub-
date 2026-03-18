@@ -623,7 +623,12 @@ export function AdminEquipmentManagement({
       }
     } catch (err: any) {
       console.error('Failed to create category:', err);
-      toast.error(err?.response?.data?.detail || 'Failed to create category');
+      const errorMsg = err?.response?.data?.detail 
+        || err?.response?.data?.name?.[0]
+        || (err?.response?.data && JSON.stringify(err.response.data))
+        || err?.message 
+        || 'Failed to create category';
+      toast.error(errorMsg);
     } finally {
       setIsLoading(false);
     }
