@@ -29,9 +29,15 @@ echo "Stopping existing containers..."
 docker-compose down
 echo ""
 
-# Build and start containers
-echo "Building and starting containers..."
-docker-compose up -d --build
+# Remove old images to force fresh rebuild
+echo "Removing old images..."
+docker rmi aiu_media_hub-backend aiu_media_hub-frontend 2>/dev/null || true
+echo ""
+
+# Build and start containers with no cache
+echo "Building and starting containers (forcing fresh build)..."
+docker-compose build --no-cache
+docker-compose up -d
 echo ""
 
 # Wait for services to be healthy

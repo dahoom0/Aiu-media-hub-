@@ -45,11 +45,16 @@ echo "🛑 Stopping existing containers (if any)..."
 docker-compose down 2>/dev/null || true
 echo ""
 
-# Build and start containers
-echo "🏗️  Building Docker images..."
-echo "This may take a few minutes on first run..."
+# Remove old images to force fresh rebuild
+echo "🗑️  Removing old images to ensure fresh build..."
+docker rmi aiu_media_hub-backend aiu_media_hub-frontend 2>/dev/null || true
 echo ""
-docker-compose build
+
+# Build and start containers with no cache
+echo "🏗️  Building Docker images (forcing fresh build)..."
+echo "This may take a few minutes..."
+echo ""
+docker-compose build --no-cache
 
 echo ""
 echo "🚀 Starting services..."
