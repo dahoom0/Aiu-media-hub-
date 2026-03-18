@@ -206,6 +206,12 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const [rejectComment, setRejectComment] = useState('');
   const [rejectTarget, setRejectTarget] = useState<{ type: ApprovalType; id: number } | null>(null);
 
+  // ✅ Return approval/rejection dialog states
+  const [isReturnApproveDialogOpen, setIsReturnApproveDialogOpen] = useState(false);
+  const [isReturnRejectDialogOpen, setIsReturnRejectDialogOpen] = useState(false);
+  const [returnRemark, setReturnRemark] = useState('');
+  const [returnTarget, setReturnTarget] = useState<number | null>(null);
+
   const studentDisplay = (obj: { student_name?: string; user?: any }) => {
     if (obj.student_name) return obj.student_name;
     const first = obj.user?.first_name || '';
@@ -335,6 +341,20 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
 
     return [...pendingBookings, ...pendingRentals, ...pendingCVs].slice(0, 6);
   }, [bookings, rentals, cvs]);
+
+  // ✅ NEW: Pending return requests (student returned, waiting admin approval)
+  const pendingReturns = useMemo(() => {
+    return rentals
+      .filter((r) => safeStatus(r.status) === 'pending_return')
+      .map((r) => ({
+        id: r.id,
+        student: studentDisplay(r),
+        item: rentalItemLabel(r),
+        duration: rentalDurationLabel(r),
+        requestedAt: safeTime(r.created_at),
+        return_remark: (r as any).return_remark || ''
+      }));
+  }, [rentals]);
 
   const recentActivity = useMemo(() => {
     const rows: Array<{
@@ -607,6 +627,60 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
     return { total, inUse, percent };
   }, [labs, bookings]);
 
+  // ✅ Handle approve return with remark
+  const handleApproveReturn = async (id: number, remark: string) => {
+    const key = `return-${id}`;
+    setActionLoading((prev) => ({ ...prev, [key]: 'approve' }));
+    setError(null);
+
+    try {
+      await equipmentAdminService.approveReturn(id, remark);
+      setIsReturnApproveDialogOpen(false);
+      setReturnTarget(null);
+      setReturnRemark('');
+      await loadDashboard();
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || e?.message || 'Failed to approve return.';
+      setError(msg);
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [key]: null }));
+    }
+  };
+
+  // ✅ Handle reject return with reason
+  const handleRejectReturn = async (id: number, reason: string) => {
+    const key = `return-${id}`;
+    setActionLoading((prev) => ({ ...prev, [key]: 'reject' }));
+    setError(null);
+
+    try {
+      await equipmentAdminService.rejectReturn(id, reason);
+      setIsReturnRejectDialogOpen(false);
+      setReturnTarget(null);
+      setReturnRemark('');
+      await loadDashboard();
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || e?.message || 'Failed to reject return.';
+      setError(msg);
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [key]: null }));
+    }
+  };
+
+  // ✅ Open approve return dialog
+  const openApproveReturnDialog = (id: number) => {
+    setReturnTarget(id);
+    setReturnRemark('');
+    setIsReturnApproveDialogOpen(true);
+  };
+
+  // ✅ Open reject return dialog
+  const openRejectReturnDialog = (id: number) => {
+    setReturnTarget(id);
+    setReturnRemark('');
+    setIsReturnRejectDialogOpen(true);
+  };
+
   const handleDownloadUsageReport = async () => {
     try {
       // Dynamically import xlsx library
@@ -877,10 +951,75 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
           </CardContent>
         </Card>
 
+        {/* ✅ NEW: Pending Returns Card */}
         <Card className="bg-gray-900/50 border-gray-800">
           <CardHeader>
-            <CardTitle className="text-white">Recent Activity</CardTitle>
-            <CardDescription className="text-gray-400">Latest system activities</CardDescription>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-white">Pending Returns</CardTitle>
+              <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/50">
+                {pendingReturns.length} Pending
+              </Badge>
+            </div>
+            <CardDescription className="text-gray-400">Equipment returns awaiting inspection</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {pendingReturns.length === 0 ? (
+              <p className="text-gray-500 text-sm text-center py-4">No pending returns</p>
+            ) : (
+              pendingReturns.map((returnItem: any) => {
+                const key = `return-${returnItem.id}`;
+                const rowLoading = actionLoading[key] !== null && actionLoading[key] !== undefined;
+
+                return (
+                  <div key={returnItem.id} className="p-4 rounded-lg bg-gray-800/50 border border-gray-700 space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-start gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/20">
+                          <Package className="h-5 w-5 text-orange-400" />
+                        </div>
+                        <div>
+                          <p className="text-white">{returnItem.student}</p>
+                          <p className="text-sm text-gray-400">{returnItem.item}</p>
+                          <p className="text-xs text-gray-500 mt-1">Duration: {returnItem.duration}</p>
+                        </div>
+                      </div>
+                      <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/50">return</Badge>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-700">
+                      <p className="text-xs text-gray-500">{returnItem.requestedAt}</p>
+
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                          disabled={loading || rowLoading}
+                          onClick={() => openRejectReturnDialog(returnItem.id)}
+                        >
+                          <XCircle className="h-3 w-3 mr-1" />
+                          Reject
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+                          disabled={loading || rowLoading}
+                          onClick={() => openApproveReturnDialog(returnItem.id)}
+                        >
+                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                          Approve
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
           </CardHeader>
           <CardContent className="space-y-4">
             {recentActivity.map((activity: any) => (
@@ -1077,6 +1216,66 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
               disabled={loading || !rejectTarget}
             >
               Reject
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ APPROVE RETURN DIALOG */}
+      <Dialog open={isReturnApproveDialogOpen} onOpenChange={setIsReturnApproveDialogOpen}>
+        <DialogContent className="bg-gray-900 border-gray-800">
+          <DialogHeader>
+            <DialogTitle className="text-white">Approve Equipment Return</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-gray-400">Admin Remark (optional)</Label>
+            <Textarea
+              value={returnRemark}
+              onChange={(e) => setReturnRemark(e.target.value)}
+              placeholder="Equipment condition notes, any damages, etc..."
+              className="bg-gray-950 border-gray-800 text-white"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setIsReturnApproveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+              onClick={() => returnTarget && handleApproveReturn(returnTarget, returnRemark)}
+              disabled={loading || !returnTarget}
+            >
+              Approve Return
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ REJECT RETURN DIALOG */}
+      <Dialog open={isReturnRejectDialogOpen} onOpenChange={setIsReturnRejectDialogOpen}>
+        <DialogContent className="bg-gray-900 border-gray-800">
+          <DialogHeader>
+            <DialogTitle className="text-white">Reject Equipment Return</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-gray-400">Rejection Reason (student will see this)</Label>
+            <Textarea
+              value={returnRemark}
+              onChange={(e) => setReturnRemark(e.target.value)}
+              placeholder="Explain why the return is rejected (e.g., equipment damaged, missing accessories)..."
+              className="bg-gray-950 border-gray-800 text-white"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setIsReturnRejectDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-500 text-white hover:bg-red-600"
+              onClick={() => returnTarget && handleRejectReturn(returnTarget, returnRemark)}
+              disabled={loading || !returnTarget}
+            >
+              Reject Return
             </Button>
           </div>
         </DialogContent>
