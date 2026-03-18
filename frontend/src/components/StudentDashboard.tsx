@@ -652,7 +652,7 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
         <Card className="bg-gray-900/50 border-gray-800">
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-white">Active Rentals</CardTitle>
+              <CardTitle className="text-white">Equipment to Return</CardTitle>
               <Button
                 variant="ghost"
                 size="sm"
@@ -662,72 +662,75 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
                 View All
               </Button>
             </div>
+            <CardDescription className="text-gray-400">
+              Return your rented equipment before the due date
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Equipment to Return Section */}
-            {activeRentals.length > 0 && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Package className="h-4 w-4 text-orange-400" />
-                  <p className="text-sm font-medium text-orange-400">Equipment to Return</p>
-                </div>
-                {activeRentals.slice(0, 3).map((rental) => {
-                  const isOverdue = rental.status === 'overdue';
-                  const dueDate = rental.dueDate !== 'N/A' ? new Date(rental.dueDate) : null;
-                  const today = new Date();
-                  const isDueSoon = dueDate && !isOverdue && (dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24) <= 2;
-
-                  return (
-                    <div
-                      key={rental.id}
-                      className={`p-4 rounded-lg border ${
-                        isOverdue 
-                          ? 'bg-red-500/10 border-red-500/50' 
-                          : isDueSoon
-                          ? 'bg-yellow-500/10 border-yellow-500/50'
-                          : 'bg-gray-800/50 border-gray-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-1 flex-1">
-                          <p className="text-white font-medium">{rental.equipment}</p>
-                          <div className="flex items-center gap-2">
-                            <p className={`text-sm ${isOverdue ? 'text-red-400' : isDueSoon ? 'text-yellow-400' : 'text-gray-400'}`}>
-                              Due: {rental.dueDate}
-                            </p>
-                            {isOverdue && (
-                              <Badge className="bg-red-500/20 text-red-400 text-xs">
-                                OVERDUE
-                              </Badge>
-                            )}
-                            {isDueSoon && !isOverdue && (
-                              <Badge className="bg-yellow-500/20 text-yellow-400 text-xs">
-                                DUE SOON
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                        <Button
-                          size="sm"
-                          className={`${
-                            isOverdue 
-                              ? 'bg-red-500 hover:bg-red-600' 
-                              : 'bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600'
-                          } text-white`}
-                          onClick={() => onNavigate('equipment-rental')}
-                        >
-                          Return Now
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
             {activeRentals.length === 0 ? (
-              <p className="text-gray-500 text-sm text-center py-4">No active rentals.</p>
-            ) : null}
+              <p className="text-gray-500 text-sm text-center py-4">No equipment to return.</p>
+            ) : (
+              activeRentals.map((rental) => {
+                const isOverdue = rental.status === 'overdue';
+                const dueDate = rental.dueDate !== 'N/A' ? new Date(rental.dueDate) : null;
+                const today = new Date();
+                const isDueSoon = dueDate && !isOverdue && (dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24) <= 2;
+
+                return (
+                  <div
+                    key={rental.id}
+                    className={`p-4 rounded-lg border ${
+                      isOverdue 
+                        ? 'bg-red-500/10 border-red-500/50' 
+                        : isDueSoon
+                        ? 'bg-yellow-500/10 border-yellow-500/50'
+                        : 'bg-gray-800/50 border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 flex-1">
+                        <p className="text-white font-medium">{rental.equipment}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className={`text-sm ${isOverdue ? 'text-red-400' : isDueSoon ? 'text-yellow-400' : 'text-gray-400'}`}>
+                            Due: {rental.dueDate}
+                          </p>
+                          {isOverdue && (
+                            <Badge className="bg-red-500/20 text-red-400 text-xs">
+                              OVERDUE
+                            </Badge>
+                          )}
+                          {isDueSoon && !isOverdue && (
+                            <Badge className="bg-yellow-500/20 text-yellow-400 text-xs">
+                              DUE SOON
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        className={`${
+                          isOverdue 
+                            ? 'bg-red-500 hover:bg-red-600' 
+                            : 'bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600'
+                        } text-white`}
+                        onClick={async () => {
+                          try {
+                            await equipmentService.returnItem(rental.id);
+                            // Refresh the page to show updated status
+                            window.location.reload();
+                          } catch (error: any) {
+                            console.error('Return failed:', error);
+                            alert(error?.response?.data?.detail || 'Failed to return equipment');
+                          }
+                        }}
+                      >
+                        Return Now
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
 
             {activeRentals.length > 0 && (
               <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30 flex items-start gap-3">

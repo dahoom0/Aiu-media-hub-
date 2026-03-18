@@ -325,6 +325,11 @@ export function AdminEquipmentManagement({
   const [returnApprovalTargetId, setReturnApprovalTargetId] = useState<number | null>(null);
   const [returnRemark, setReturnRemark] = useState('');
 
+  // ✅ NEW: Force return dialog state
+  const [isForceReturnDialogOpen, setIsForceReturnDialogOpen] = useState(false);
+  const [forceReturnTargetId, setForceReturnTargetId] = useState<number | null>(null);
+  const [forceReturnRemark, setForceReturnRemark] = useState('');
+
   // Status change dialog state
   const [isStatusDialogOpen, setIsStatusDialogOpen] = useState(false);
   const [statusChangeTarget, setStatusChangeTarget] = useState<{ id: string; status: EquipmentUI['status']; item: EquipmentUI } | null>(null);
@@ -993,11 +998,6 @@ export function AdminEquipmentManagement({
     setReturnRemark('');
     setIsReturnApprovalDialogOpen(true);
   };
-
-  // ✅ NEW: Force return dialog state
-  const [isForceReturnDialogOpen, setIsForceReturnDialogOpen] = useState(false);
-  const [forceReturnTargetId, setForceReturnTargetId] = useState<number | null>(null);
-  const [forceReturnRemark, setForceReturnRemark] = useState('');
 
   /**
    * Opens force return dialog for active rentals
