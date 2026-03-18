@@ -315,6 +315,11 @@ export function AdminEquipmentManagement({
   const [rentalsLoading, setRentalsLoading] = useState(false);
   const [rentalActionLoading, setRentalActionLoading] = useState<Record<number, 'approve' | 'reject' | null>>({});
 
+  // Category management state
+  const [isAddCategoryDialogOpen, setIsAddCategoryDialogOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryColor, setNewCategoryColor] = useState('#3b82f6');
+
   const categoryIdToName = useMemo(() => {
     const m = new Map<number, string>();
     categories.forEach((c) => m.set(c.id, c.name));
@@ -582,6 +587,46 @@ export function AdminEquipmentManagement({
     }
 
     return fd;
+  };
+
+  // ============================================================================
+  // CATEGORY MANAGEMENT
+  // ============================================================================
+  
+  /**
+   * Creates a new equipment category
+   */
+  const handleAddCategory = async () => {
+    if (!newCategoryName.trim()) {
+      toast.error('Please enter a category name');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const response = await api.post('/equipment-categories/', {
+        name: newCategoryName.trim(),
+        color: newCategoryColor
+      });
+      
+      toast.success('Category created successfully!');
+      setNewCategoryName('');
+      setNewCategoryColor('#3b82f6');
+      setIsAddCategoryDialogOpen(false);
+      
+      // Reload categories
+      await loadCategories();
+      
+      // Auto-select the new category
+      if (response.data?.id) {
+        setEquipmentCategoryIds(prev => [...prev, response.data.id]);
+      }
+    } catch (err: any) {
+      console.error('Failed to create category:', err);
+      toast.error(err?.response?.data?.detail || 'Failed to create category');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // ============================================================================
@@ -1250,14 +1295,26 @@ export function AdminEquipmentManagement({
                 </div>
 
                 <div>
-                  <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
-                    Categories * (select at least one)
-                  </Label>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>
+                      Categories * (select at least one)
+                    </Label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsAddCategoryDialogOpen(true)}
+                      className="text-xs"
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      New Category
+                    </Button>
+                  </div>
 
                   <div className={`mt-2 p-4 rounded-lg border ${theme === 'light' ? 'bg-gray-50 border-gray-200' : 'bg-gray-800 border-gray-700'}`}>
                     {categories.length === 0 ? (
                       <div className={`text-sm ${theme === 'light' ? 'text-gray-600' : 'text-gray-400'}`}>
-                        No categories found. Make sure backend router has <b>equipment-categories</b>.
+                        No categories found. Click "New Category" to create one.
                       </div>
                     ) : (
                       <div className="space-y-2">
@@ -1806,6 +1863,58 @@ export function AdminEquipmentManagement({
               className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
             >
               Update Equipment
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ADD CATEGORY DIALOG */}
+      <Dialog open={isAddCategoryDialogOpen} onOpenChange={setIsAddCategoryDialogOpen}>
+        <DialogContent className={theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}>
+          <DialogHeader>
+            <DialogTitle>Create New Category</DialogTitle>
+            <DialogDescription>
+              Add a new equipment category that can be assigned to equipment items.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label>Category Name *</Label>
+              <Input
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="e.g. Cameras, Microphones, Lighting"
+                className={theme === 'light' ? 'bg-gray-50' : 'bg-gray-800'}
+              />
+            </div>
+            <div>
+              <Label>Color</Label>
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  type="color"
+                  value={newCategoryColor}
+                  onChange={(e) => setNewCategoryColor(e.target.value)}
+                  className="w-12 h-10 rounded border cursor-pointer"
+                />
+                <Input
+                  value={newCategoryColor}
+                  onChange={(e) => setNewCategoryColor(e.target.value)}
+                  placeholder="#3b82f6"
+                  className={theme === 'light' ? 'bg-gray-50' : 'bg-gray-800'}
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsAddCategoryDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddCategory}
+              disabled={isLoading}
+              className="bg-teal-500 hover:bg-teal-600 text-white"
+            >
+              {isLoading ? 'Creating...' : 'Create Category'}
             </Button>
           </div>
         </DialogContent>

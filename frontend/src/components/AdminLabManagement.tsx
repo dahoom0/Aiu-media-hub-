@@ -194,6 +194,9 @@ export function AdminLabManagement() {
   // Form States
   const [newLabName, setNewLabName] = useState('');
   const [newLabCapacity, setNewLabCapacity] = useState('');
+  const [newLabDescription, setNewLabDescription] = useState('');
+  const [newLabLocation, setNewLabLocation] = useState('');
+  const [newLabFacilities, setNewLabFacilities] = useState('');
 
   // Data States
   const [labs, setLabs] = useState<Lab[]>([]);
@@ -271,16 +274,25 @@ export function AdminLabManagement() {
 
   // --- Handlers ---
   const handleAddLab = async () => {
-    if (!newLabName || !newLabCapacity) {
-      toast.error('Please fill in all fields');
+    if (!newLabName || !newLabCapacity || !newLabLocation) {
+      toast.error('Please fill in all required fields (Name, Capacity, Location)');
       return;
     }
     try {
       setLoading(true);
-      await labAdminService.createLab({ name: newLabName, capacity: Number(newLabCapacity) });
+      await labAdminService.createLab({ 
+        name: newLabName, 
+        capacity: Number(newLabCapacity),
+        description: newLabDescription || '',
+        location: newLabLocation,
+        facilities: newLabFacilities || ''
+      });
       toast.success('Lab added successfully!');
       setNewLabName('');
       setNewLabCapacity('');
+      setNewLabDescription('');
+      setNewLabLocation('');
+      setNewLabFacilities('');
       setIsAddLabDialogOpen(false);
       await loadAll();
     } catch (e: any) {
@@ -648,16 +660,41 @@ export function AdminLabManagement() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>Lab Name</Label>
+              <Label>Lab Name *</Label>
               <Input value={newLabName} onChange={(e) => setNewLabName(e.target.value)} placeholder="e.g. Media Lab 1" />
             </div>
             <div className="space-y-2">
-              <Label>Capacity</Label>
+              <Label>Capacity *</Label>
               <Input
                 type="number"
                 value={newLabCapacity}
                 onChange={(e) => setNewLabCapacity(e.target.value)}
                 placeholder="30"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Location *</Label>
+              <Input 
+                value={newLabLocation} 
+                onChange={(e) => setNewLabLocation(e.target.value)} 
+                placeholder="e.g. Building A, Floor 2" 
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Textarea 
+                value={newLabDescription} 
+                onChange={(e) => setNewLabDescription(e.target.value)} 
+                placeholder="Brief description of the lab"
+                rows={3}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Facilities</Label>
+              <Input 
+                value={newLabFacilities} 
+                onChange={(e) => setNewLabFacilities(e.target.value)} 
+                placeholder="e.g. iMacs, Projector, Whiteboard" 
               />
             </div>
           </div>
