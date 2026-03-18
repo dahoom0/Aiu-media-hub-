@@ -105,10 +105,11 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
           bookingsData = [];
         }
 
-        // 2) Fetch rentals (student scope)
+        // 2) Fetch rentals (student scope) - only active rentals that need to be returned
         try {
           const res = await equipmentService.getMyActiveRentals();
-          rentalsData = normalizeList(res);
+          rentalsData = Array.isArray(res) ? res : normalizeList(res);
+          console.log('Fetched active rentals:', rentalsData);
         } catch (e) {
           console.warn('Rentals fetch failed', e);
           rentalsData = [];
@@ -206,10 +207,16 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
 
         // B) Rentals (active-like)
         const rList = Array.isArray(rentalsData) ? rentalsData : [];
+        console.log('All rentals data:', rList);
         const activeLikeStatuses = new Set(['approved', 'active', 'overdue', 'damaged']);
 
         const myRentals = rList
-          .filter((r: any) => activeLikeStatuses.has(norm(r?.status)))
+          .filter((r: any) => {
+            const status = norm(r?.status);
+            const isActive = activeLikeStatuses.has(status);
+            console.log('Rental:', r.id, 'Status:', status, 'IsActive:', isActive);
+            return isActive;
+          })
           .map((r: any) => {
             const eq =
               r.equipment_name ||
@@ -217,7 +224,7 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
               r.equipment?.name ||
               (r.equipment ? `Equipment #${r.equipment}` : 'Equipment');
 
-            return {
+            const rental = {
               id: r.id,
               equipment: eq,
               dueDate: r.expected_return_date
@@ -225,8 +232,11 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
                 : 'N/A',
               status: norm(r?.status) || 'active'
             };
+            console.log('Mapped rental:', rental);
+            return rental;
           });
 
+        console.log('Active rentals to display:', myRentals);
         setActiveRentals(myRentals);
 
         // C) Tutorials
