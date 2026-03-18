@@ -163,13 +163,45 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
       {/* Footer */}
       <footer className="border-t border-gray-800 bg-gray-950/50">
         <div className="mx-auto max-w-7xl px-6 py-8">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-            <p className="text-sm text-gray-400">
-              © 2025 AIU Media Hub. Built for Albukhary International University.
-            </p>
-            <p className="text-sm text-gray-400">
-              ReactJS + TailwindCSS + Django
-            </p>
+          <div className="flex flex-col items-center gap-6">
+            {/* Main Footer Info */}
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4 w-full">
+              <p className="text-sm text-gray-400">
+                © 2025 AIU Media Hub. Built for Albukhary International University.
+              </p>
+              <p className="text-sm text-gray-400">
+                ReactJS + TailwindCSS + Django
+              </p>
+            </div>
+            
+            {/* Developer Credits */}
+            <div className="border-t border-gray-800 pt-6 w-full">
+              <div className="text-center space-y-3">
+                <p className="text-xs text-gray-500 uppercase tracking-wider">Developed By</p>
+                <div className="flex flex-wrap justify-center gap-x-6 gap-y-2">
+                  <div className="text-sm text-gray-400">
+                    <span className="text-teal-400">Abdirahman Abdillahi Nour</span>
+                    <span className="text-gray-600 mx-2">•</span>
+                    <a href="mailto:a.rahmanabdillahi@gmail.com" className="text-gray-500 hover:text-teal-400 transition-colors">
+                      a.rahmanabdillahi@gmail.com
+                    </a>
+                  </div>
+                  <div className="text-sm text-gray-400">
+                    <span className="text-teal-400">Abdullah Hakeem Mohamad</span>
+                    <span className="text-gray-600 mx-2">•</span>
+                    <a href="mailto:abdullahhakeem2004@gmail.com" className="text-gray-500 hover:text-teal-400 transition-colors">
+                      abdullahhakeem2004@gmail.com
+                    </a>
+                  </div>
+                  <div className="text-sm text-gray-400">
+                    <span className="text-teal-400">Khalid Waleed Ahmed</span>
+                  </div>
+                  <div className="text-sm text-gray-400">
+                    <span className="text-teal-400">Abdullah Ghaleb</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </footer>
