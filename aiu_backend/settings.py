@@ -95,8 +95,6 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS Settings - Updated with your IP and common local ports
-CORS_ALLOWED_ORIGINS = [
 # CORS Settings - Allow all origins in Docker, specific in production
 if DEBUG or os.getenv('DOCKER_ENV') == 'true':
     CORS_ALLOW_ALL_ORIGINS = True
