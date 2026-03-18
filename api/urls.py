@@ -43,6 +43,9 @@ router.register(r'references', views.ReferenceViewSet, basename='reference')
 router.register(r'languages', views.LanguageViewSet, basename='language')
 router.register(r'awards', views.AwardViewSet, basename='award')
 
+# --- Notifications ---
+router.register(r'notifications', views.NotificationViewSet, basename='notification')
+
 urlpatterns = [
     # --- Health check ---
     path('health/', views.health_check, name='health-check'),

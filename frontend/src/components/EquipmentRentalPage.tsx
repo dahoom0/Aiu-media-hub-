@@ -905,115 +905,209 @@ export function EquipmentRentalPage({ onNavigate }: EquipmentRentalPageProps) {
         </TabsContent>
       </Tabs>
 
-      {/* ✅ My Bookings */}
+      {/* ✅ My Bookings - Split into Active Rentals and All Bookings */}
       <Card className={`${theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}`}>
         <CardHeader>
-          <CardTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>My Bookings</CardTitle>
+          <CardTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>My Equipment</CardTitle>
           <CardDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
-            View and manage your equipment rental requests (latest 5)
+            View and manage your equipment rentals
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
-            {myRentals.length === 0 ? (
-              <div className="text-sm text-gray-400 text-center py-8">No bookings found.</div>
-            ) : (
-              myRentals.map((rental) => {
-                const statusLower = safeLower(rental.status);
-                const canReturn = statusLower === 'approved' || statusLower === 'active';
-                const canCancel = statusLower === 'pending';
+          <Tabs defaultValue="to-return" className="w-full">
+            <TabsList className={`grid w-full grid-cols-2 ${theme === 'light' ? 'bg-gray-100' : 'bg-gray-800'}`}>
+              <TabsTrigger value="to-return">To Be Returned</TabsTrigger>
+              <TabsTrigger value="all">All Bookings</TabsTrigger>
+            </TabsList>
 
-                // ✅ clickable only for rejected items (shows reject_reason dialog)
-                const isRejected = statusLower === 'rejected';
-                const hasReason = Boolean(String(rental.reject_reason ?? '').trim());
-                const clickable = isRejected && hasReason;
+            {/* ✅ TO BE RETURNED TAB - Shows active/approved rentals prominently */}
+            <TabsContent value="to-return" className="space-y-3 mt-4">
+              {myRentals.filter(r => {
+                const s = safeLower(r.status);
+                return s === 'approved' || s === 'active';
+              }).length === 0 ? (
+                <div className="text-sm text-gray-400 text-center py-8">
+                  No equipment to return right now.
+                </div>
+              ) : (
+                myRentals
+                  .filter(r => {
+                    const s = safeLower(r.status);
+                    return s === 'approved' || s === 'active';
+                  })
+                  .map((rental) => {
+                    const statusLower = safeLower(rental.status);
 
-                return (
-                  <div
-                    key={rental.id}
-                    onClick={() => {
-                      if (clickable) openRejectReasonDialog(rental);
-                    }}
-                    className={`flex flex-col md:flex-row md:items-center justify-between p-4 rounded-lg bg-gray-800/50 border border-gray-700 gap-4 ${
-                      clickable ? 'cursor-pointer' : ''
-                    }`}
-                    title={clickable ? 'Click to view admin comment' : undefined}
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-3">
-                        <h4 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{rental.name}</h4>
-
-                        <Badge className={getRentalStatusColor(rental.status)}>
-                          {getStatusIcon(rental.status)}
-                          <span className="ml-1 capitalize">{statusLower || 'unknown'}</span>
-                        </Badge>
-                      </div>
-
+                    return (
                       <div
-                        className={`flex flex-wrap items-center gap-3 text-sm ${
-                          theme === 'light' ? 'text-gray-600' : 'text-gray-400'
+                        key={rental.id}
+                        className={`flex flex-col md:flex-row md:items-center justify-between p-4 rounded-lg border gap-4 ${
+                          theme === 'light' 
+                            ? 'bg-amber-50 border-amber-200' 
+                            : 'bg-amber-900/20 border-amber-700/50'
                         }`}
                       >
-                        <div className="flex items-center gap-1">
-                          <QrCode className="h-4 w-4" />
-                          <span>ID: {rental.qrCode}</span>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-3">
+                            <h4 className={theme === 'light' ? 'text-gray-900 font-semibold' : 'text-white font-semibold'}>
+                              {rental.name}
+                            </h4>
+
+                            <Badge className={getRentalStatusColor(rental.status)}>
+                              {getStatusIcon(rental.status)}
+                              <span className="ml-1 capitalize">{statusLower || 'unknown'}</span>
+                            </Badge>
+                          </div>
+
+                          <div
+                            className={`flex flex-wrap items-center gap-3 text-sm ${
+                              theme === 'light' ? 'text-gray-600' : 'text-gray-400'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1">
+                              <QrCode className="h-4 w-4" />
+                              <span>ID: {rental.qrCode}</span>
+                            </div>
+
+                            <span>•</span>
+
+                            <div className="flex items-center gap-1">
+                              <Calendar className="h-4 w-4" />
+                              <span>Rented: {rental.requestedAt}</span>
+                            </div>
+
+                            <span>•</span>
+
+                            <div className="flex items-center gap-1">
+                              <Clock className="h-4 w-4" />
+                              <span className="font-semibold text-amber-600">Due: {rental.dueDate}</span>
+                            </div>
+                          </div>
                         </div>
 
-                        <span>•</span>
-
-                        <div className="flex items-center gap-1">
-                          <Calendar className="h-4 w-4" />
-                          <span>{rental.requestedAt}</span>
-                        </div>
-
-                        <span>•</span>
-
-                        <div className="flex items-center gap-1">
-                          <Clock className="h-4 w-4" />
-                          <span>Due: {rental.dueDate}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                      {canCancel && (
                         <Button
                           size="sm"
-                          variant="outline"
-                          className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                          className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleCancel(rental.id);
+                            handleReturn(rental.id);
                           }}
                         >
-                          Cancel
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          Return Equipment
                         </Button>
-                      )}
+                      </div>
+                    );
+                  })
+              )}
+            </TabsContent>
 
-                      <Button
-                        size="sm"
-                        className={`${
-                          canReturn
-                            ? 'bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white'
-                            : theme === 'light'
-                              ? 'bg-gray-100 text-gray-400'
-                              : 'bg-gray-800 text-gray-400'
-                        }`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleReturn(rental.id);
-                        }}
-                        disabled={!canReturn}
-                      >
-                        <CheckCircle2 className="h-4 w-4 mr-2" />
-                        Return
-                      </Button>
+            {/* ✅ ALL BOOKINGS TAB - Shows all rental history */}
+            <TabsContent value="all" className="space-y-3 mt-4">
+              {myRentals.length === 0 ? (
+                <div className="text-sm text-gray-400 text-center py-8">No bookings found.</div>
+              ) : (
+                myRentals.map((rental) => {
+                  const statusLower = safeLower(rental.status);
+                  const canReturn = statusLower === 'approved' || statusLower === 'active';
+                  const canCancel = statusLower === 'pending';
+                  const isPendingReturn = statusLower === 'pending_return';
+
+                  // ✅ clickable only for rejected items (shows reject_reason dialog)
+                  const isRejected = statusLower === 'rejected';
+                  const hasReason = Boolean(String(rental.reject_reason ?? '').trim());
+                  const clickable = isRejected && hasReason;
+
+                  return (
+                    <div
+                      key={rental.id}
+                      onClick={() => {
+                        if (clickable) openRejectReasonDialog(rental);
+                      }}
+                      className={`flex flex-col md:flex-row md:items-center justify-between p-4 rounded-lg bg-gray-800/50 border border-gray-700 gap-4 ${
+                        clickable ? 'cursor-pointer' : ''
+                      }`}
+                      title={clickable ? 'Click to view admin comment' : undefined}
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-3">
+                          <h4 className={theme === 'light' ? 'text-gray-900' : 'text-white'}>{rental.name}</h4>
+
+                          <Badge className={getRentalStatusColor(rental.status)}>
+                            {getStatusIcon(rental.status)}
+                            <span className="ml-1 capitalize">
+                              {isPendingReturn ? 'Return Pending' : (statusLower || 'unknown')}
+                            </span>
+                          </Badge>
+                        </div>
+
+                        <div
+                          className={`flex flex-wrap items-center gap-3 text-sm ${
+                            theme === 'light' ? 'text-gray-600' : 'text-gray-400'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1">
+                            <QrCode className="h-4 w-4" />
+                            <span>ID: {rental.qrCode}</span>
+                          </div>
+
+                          <span>•</span>
+
+                          <div className="flex items-center gap-1">
+                            <Calendar className="h-4 w-4" />
+                            <span>{rental.requestedAt}</span>
+                          </div>
+
+                          <span>•</span>
+
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-4 w-4" />
+                            <span>Due: {rental.dueDate}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
+                        {canCancel && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCancel(rental.id);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        )}
+
+                        {isPendingReturn && (
+                          <div className={`text-xs px-3 py-2 rounded ${theme === 'light' ? 'bg-blue-100 text-blue-700' : 'bg-blue-500/20 text-blue-300'}`}>
+                            Waiting for admin approval
+                          </div>
+                        )}
+
+                        {canReturn && !isPendingReturn && (
+                          <Button
+                            size="sm"
+                            className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleReturn(rental.id);
+                            }}
+                          >
+                            <CheckCircle2 className="h-4 w-4 mr-2" />
+                            Return
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+                  );
+                })
+              )}
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
 

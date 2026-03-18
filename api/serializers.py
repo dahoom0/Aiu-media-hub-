@@ -891,6 +891,13 @@ class AwardSerializer(serializers.ModelSerializer):
         read_only_fields = ["cv"]
 
 
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ['id', 'title', 'message', 'notification_type', 'is_read', 'related_rental_id', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
 class CVSerializer(serializers.ModelSerializer):
     education = EducationSerializer(many=True, read_only=True)
     experience = ExperienceSerializer(many=True, read_only=True)

@@ -138,6 +138,10 @@ const cvService = {
     const res = await api.get('/references/');
     return normalizeList(res.data);
   },
+  listInvolvements: async () => {
+    const res = await api.get('/involvements/');
+    return normalizeList(res.data);
+  },
 
   // -------------------------------------------
   // EDUCATION
@@ -228,6 +232,18 @@ const cvService = {
   },
   deleteAward: async (id) => {
     await api.delete(`/awards/${id}/`);
+  },
+
+  // -------------------------------------------
+  // INVOLVEMENTS / LEADERSHIP
+  // Backend expects: role, organization, year, description, order
+  // -------------------------------------------
+  addInvolvement: async (data) => {
+    const response = await api.post('/involvements/', data);
+    return response.data;
+  },
+  deleteInvolvement: async (id) => {
+    await api.delete(`/involvements/${id}/`);
   },
 };
 

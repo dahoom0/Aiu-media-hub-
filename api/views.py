@@ -101,6 +101,22 @@ def _equipment_sync(equipment):
             pass
 
 
+# ---------------- NOTIFICATION HELPER ---------------- #
+
+def create_notification(user, title, message, notification_type='general', related_rental_id=None):
+    """Helper function to create notifications for users"""
+    try:
+        Notification.objects.create(
+            user=user,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+            related_rental_id=related_rental_id
+        )
+    except Exception as e:
+        print(f"Failed to create notification: {e}")
+
+
 # ---------------- AUTH VIEWS ---------------- #
 
 @api_view(["POST"])
@@ -1654,6 +1670,21 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         rental.actual_return_date = timezone.now()
         rental.save()
 
+        # ✅ Create notification for admin (notify all admins)
+        equipment_name = rental.equipment.name if rental.equipment else 'Equipment'
+        student_name = rental.student.get_full_name() if rental.student else 'Student'
+        
+        # Notify all admin users
+        admin_users = User.objects.filter(Q(is_staff=True) | Q(user_type='admin'))
+        for admin in admin_users:
+            create_notification(
+                user=admin,
+                title='Equipment Return Request',
+                message=f'{student_name} has returned {equipment_name}. Please check and approve the return.',
+                notification_type='return_received',
+                related_rental_id=rental.id
+            )
+
         return Response(self.get_serializer(rental).data)
 
     @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminUser])
@@ -1692,28 +1723,15 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
             ).count()
             StudentProfile.objects.filter(user=rental.student).update(active_rentals=count)
 
-        return Response(self.get_serializer(rental).data)
-
-    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminUser])
-    def reject_return(self, request, pk=None):
-        """
-        ✅ Admin rejects the return request - student must resubmit
-        Sets status back to 'active' with reject reason
-        """
-        rental = self.get_object()
-        current_status = (rental.status or "").strip().lower()
-
-        if current_status != "pending_return":
-            return Response({"detail": "Only pending returns can be rejected."}, status=400)
-
-        reason = request.data.get('reason') or request.data.get('reject_reason') or request.data.get('remark') or ''
-        reason = str(reason).strip() or "Return rejected by admin - please resubmit"
-
-        # ✅ Set back to active with reject reason
-        rental.status = "active"
-        rental.return_remark = reason
-        rental.actual_return_date = None  # Clear return date
-        rental.save()
+        # ✅ Create notification for student
+        equipment_name = rental.equipment.name if rental.equipment else 'Equipment'
+        create_notification(
+            user=rental.student,
+            title='Equipment Return Approved',
+            message=f'Your return of {equipment_name} has been approved by admin. {remark if remark else ""}',
+            notification_type='return_approved',
+            related_rental_id=rental.id
+        )
 
         return Response(self.get_serializer(rental).data)
 
@@ -1737,6 +1755,65 @@ class EquipmentRentalViewSet(viewsets.ModelViewSet):
         rental.return_remark = reason
         rental.actual_return_date = None  # Clear return date
         rental.save()
+
+        # ✅ Create notification for student
+        equipment_name = rental.equipment.name if rental.equipment else 'Equipment'
+        create_notification(
+            user=rental.student,
+            title='Equipment Return Rejected',
+            message=f'Your return of {equipment_name} was rejected. Reason: {reason}. Please return the equipment again.',
+            notification_type='return_rejected',
+            related_rental_id=rental.id
+        )
+
+        return Response(self.get_serializer(rental).data)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminUser])
+    def force_return(self, request, pk=None):
+        """
+        ✅ Admin can force return equipment without student initiation
+        Useful for overdue or lost equipment scenarios
+        """
+        rental = self.get_object()
+        current_status = (rental.status or "").strip().lower()
+
+        if current_status == "returned":
+            return Response({"message": "Already returned"})
+
+        if current_status not in ["approved", "active", "overdue", "damaged", "pending_return"]:
+            return Response({"detail": "Cannot force return for this status."}, status=400)
+
+        remark = request.data.get('remark', '').strip() or 'Force returned by admin'
+
+        # ✅ Force return
+        rental.status = "returned"
+        rental.return_remark = remark
+        rental.return_approved_by = request.user
+        rental.return_approved_at = timezone.now()
+        rental.returned_to = request.user
+        rental.actual_return_date = timezone.now()
+        rental.save()
+
+        # ✅ Sync equipment availability
+        _equipment_sync(rental.equipment)
+
+        # ✅ Update student active rentals count
+        if hasattr(rental.student, "student_profile"):
+            count = EquipmentRental.objects.filter(
+                student=rental.student, 
+                status__in=["approved", "active", "pending_return"]
+            ).count()
+            StudentProfile.objects.filter(user=rental.student).update(active_rentals=count)
+
+        # ✅ Create notification for student
+        equipment_name = rental.equipment.name if rental.equipment else 'Equipment'
+        create_notification(
+            user=rental.student,
+            title='Equipment Force Returned',
+            message=f'Admin has marked {equipment_name} as returned. Remark: {remark}',
+            notification_type='return_approved',
+            related_rental_id=rental.id
+        )
 
         return Response(self.get_serializer(rental).data)
 
@@ -2448,6 +2525,41 @@ class AwardViewSet(BaseCVItemViewSet):
 
     def get_queryset(self):
         return Award.objects.filter(cv__student=self.request.user)
+
+
+# --------------- NOTIFICATIONS --------------- #
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    queryset = Notification.objects.all()
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Students see only their notifications
+        # Admins see only their notifications
+        return Notification.objects.filter(user=self.request.user)
+
+    @action(detail=True, methods=["post"])
+    def mark_read(self, request, pk=None):
+        """Mark a notification as read"""
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save()
+        return Response(self.get_serializer(notification).data)
+
+    @action(detail=False, methods=["post"])
+    def mark_all_read(self, request):
+        """Mark all user notifications as read"""
+        Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+        return Response({"message": "All notifications marked as read"})
+
+    @action(detail=False, methods=["get"])
+    def unread_count(self, request):
+        """Get count of unread notifications"""
+        count = Notification.objects.filter(user=request.user, is_read=False).count()
+        return Response({"count": count})
+
+
 # ---------------- PASSWORD RESET (OTP) ---------------- #
 
 @api_view(["POST"])

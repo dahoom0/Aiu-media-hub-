@@ -17,13 +17,16 @@ import {
   MessageSquare,
   Flag,
   AlertTriangle,
-  CheckCircle
+  CheckCircle,
+  Bell,
+  X
 } from 'lucide-react';
 import authService from '../services/authService';
 import labBookingService from '../services/labBookingService';
 import equipmentService from '../services/equipmentService';
 import cvService from '../services/cvService';
 import tutorialService from '../services/tutorialService';
+import notificationService from '../services/notificationService';
 import { useTheme } from './ThemeProvider';
 
 interface StudentDashboardProps {
@@ -51,6 +54,11 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
 
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Notification state
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // --- REAL DATA STATE ---
   const [upcomingBookings, setUpcomingBookings] = useState<any[]>([]);
@@ -85,6 +93,8 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
         let cvData: any = {};
         let tutorialsData: any = [];
         let progressData: any = [];
+        let notificationsData: any = [];
+        let unreadCountData: any = 0;
 
         // 1) Fetch bookings
         try {
@@ -137,6 +147,22 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
           console.warn('Tutorials fetch failed', e);
           tutorialsData = [];
           progressData = [];
+        }
+
+        // 5) Fetch notifications
+        try {
+          const [nData, countData] = await Promise.all([
+            notificationService.getNotifications(),
+            notificationService.getUnreadCount()
+          ]);
+          notificationsData = normalizeList(nData);
+          unreadCountData = countData?.count || 0;
+          setNotifications(notificationsData);
+          setUnreadCount(unreadCountData);
+        } catch (e) {
+          console.warn('Notifications fetch failed', e);
+          setNotifications([]);
+          setUnreadCount(0);
         }
 
         // --- PROCESS DATA ---
@@ -298,12 +324,125 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Welcome */}
-      <div>
-        <h1 className="text-white mb-2 text-2xl font-bold">
-          Welcome back, {user?.first_name || 'Student'}!
-        </h1>
-        <p className="text-gray-400">Here's what's happening with your media projects today.</p>
+      {/* Welcome with Notification Bell */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-white mb-2 text-2xl font-bold">
+            Welcome back, {user?.first_name || 'Student'}!
+          </h1>
+          <p className="text-gray-400">Here's what's happening with your media projects today.</p>
+        </div>
+
+        {/* Notification Bell */}
+        <div className="relative">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="relative text-gray-400 hover:text-white"
+            onClick={() => setShowNotifications(!showNotifications)}
+          >
+            <Bell className="h-5 w-5" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </Button>
+
+          {/* Notification Dropdown */}
+          {showNotifications && (
+            <div className="absolute right-0 top-12 w-80 max-h-96 overflow-y-auto bg-gray-900 border border-gray-800 rounded-lg shadow-xl z-50">
+              <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                <h3 className="text-white font-medium">Notifications</h3>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowNotifications(false)}
+                  className="text-gray-400 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="divide-y divide-gray-800">
+                {notifications.length === 0 ? (
+                  <div className="p-4 text-center text-gray-500 text-sm">
+                    No notifications
+                  </div>
+                ) : (
+                  notifications.slice(0, 10).map((notif) => (
+                    <div
+                      key={notif.id}
+                      className={`p-4 hover:bg-gray-800/50 cursor-pointer ${!notif.is_read ? 'bg-teal-500/5' : ''}`}
+                      onClick={async () => {
+                        if (!notif.is_read) {
+                          try {
+                            await notificationService.markAsRead(notif.id);
+                            setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, is_read: true } : n));
+                            setUnreadCount(prev => Math.max(0, prev - 1));
+                          } catch (e) {
+                            console.error('Failed to mark as read', e);
+                          }
+                        }
+                      }}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`mt-1 ${
+                          notif.notification_type === 'return_approved' ? 'text-teal-400' :
+                          notif.notification_type === 'return_rejected' ? 'text-red-400' :
+                          notif.notification_type === 'rental_approved' ? 'text-teal-400' :
+                          notif.notification_type === 'rental_rejected' ? 'text-red-400' :
+                          'text-gray-400'
+                        }`}>
+                          {notif.notification_type === 'return_approved' || notif.notification_type === 'rental_approved' ? (
+                            <CheckCircle className="h-5 w-5" />
+                          ) : notif.notification_type === 'return_rejected' || notif.notification_type === 'rental_rejected' ? (
+                            <AlertCircle className="h-5 w-5" />
+                          ) : (
+                            <Bell className="h-5 w-5" />
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-start justify-between">
+                            <p className="text-white text-sm font-medium">{notif.title}</p>
+                            {!notif.is_read && (
+                              <div className="h-2 w-2 bg-teal-500 rounded-full mt-1"></div>
+                            )}
+                          </div>
+                          <p className="text-gray-400 text-xs mt-1">{notif.message}</p>
+                          <p className="text-gray-500 text-xs mt-1">
+                            {new Date(notif.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {notifications.length > 0 && unreadCount > 0 && (
+                <div className="p-3 border-t border-gray-800">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full text-teal-400 hover:text-teal-300"
+                    onClick={async () => {
+                      try {
+                        await notificationService.markAllAsRead();
+                        setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+                        setUnreadCount(0);
+                      } catch (e) {
+                        console.error('Failed to mark all as read', e);
+                      }
+                    }}
+                  >
+                    Mark all as read
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Stats Cards */}
@@ -525,31 +664,71 @@ export function StudentDashboard({ onNavigate }: StudentDashboardProps) {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Equipment to Return Section */}
+            {activeRentals.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Package className="h-4 w-4 text-orange-400" />
+                  <p className="text-sm font-medium text-orange-400">Equipment to Return</p>
+                </div>
+                {activeRentals.slice(0, 3).map((rental) => {
+                  const isOverdue = rental.status === 'overdue';
+                  const dueDate = rental.dueDate !== 'N/A' ? new Date(rental.dueDate) : null;
+                  const today = new Date();
+                  const isDueSoon = dueDate && !isOverdue && (dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24) <= 2;
+
+                  return (
+                    <div
+                      key={rental.id}
+                      className={`p-4 rounded-lg border ${
+                        isOverdue 
+                          ? 'bg-red-500/10 border-red-500/50' 
+                          : isDueSoon
+                          ? 'bg-yellow-500/10 border-yellow-500/50'
+                          : 'bg-gray-800/50 border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-1 flex-1">
+                          <p className="text-white font-medium">{rental.equipment}</p>
+                          <div className="flex items-center gap-2">
+                            <p className={`text-sm ${isOverdue ? 'text-red-400' : isDueSoon ? 'text-yellow-400' : 'text-gray-400'}`}>
+                              Due: {rental.dueDate}
+                            </p>
+                            {isOverdue && (
+                              <Badge className="bg-red-500/20 text-red-400 text-xs">
+                                OVERDUE
+                              </Badge>
+                            )}
+                            {isDueSoon && !isOverdue && (
+                              <Badge className="bg-yellow-500/20 text-yellow-400 text-xs">
+                                DUE SOON
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          className={`${
+                            isOverdue 
+                              ? 'bg-red-500 hover:bg-red-600' 
+                              : 'bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600'
+                          } text-white`}
+                          onClick={() => onNavigate('equipment-rental')}
+                        >
+                          Return Now
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {activeRentals.length === 0 ? (
               <p className="text-gray-500 text-sm text-center py-4">No active rentals.</p>
-            ) : (
-              activeRentals.slice(0, 3).map((rental) => (
-                <div
-                  key={rental.id}
-                  className="flex items-center justify-between p-4 rounded-lg bg-gray-800/50 border border-gray-700"
-                >
-                  <div className="space-y-1">
-                    <p className="text-white">{rental.equipment}</p>
-                    <p className="text-sm text-gray-400">Due: {rental.dueDate}</p>
-                  </div>
+            ) : null}
 
-                  <Badge
-                    className={
-                      rental.status === 'overdue'
-                        ? 'bg-red-500/20 text-red-400 border-red-500/50'
-                        : 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50'
-                    }
-                  >
-                    {rental.status === 'overdue' ? 'Overdue' : 'Active'}
-                  </Badge>
-                </div>
-              ))
-            )}
             {activeRentals.length > 0 && (
               <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30 flex items-start gap-3">
                 <AlertCircle className="h-5 w-5 text-yellow-400 mt-0.5" />

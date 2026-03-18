@@ -994,6 +994,47 @@ export function AdminEquipmentManagement({
     setIsReturnApprovalDialogOpen(true);
   };
 
+  // ✅ NEW: Force return dialog state
+  const [isForceReturnDialogOpen, setIsForceReturnDialogOpen] = useState(false);
+  const [forceReturnTargetId, setForceReturnTargetId] = useState<number | null>(null);
+  const [forceReturnRemark, setForceReturnRemark] = useState('');
+
+  /**
+   * Opens force return dialog for active rentals
+   */
+  const openForceReturnDialog = (rentalId: number) => {
+    setForceReturnTargetId(rentalId);
+    setForceReturnRemark('');
+    setIsForceReturnDialogOpen(true);
+  };
+
+  /**
+   * Force returns equipment (admin action for overdue/lost scenarios)
+   */
+  const confirmForceReturn = async () => {
+    const id = forceReturnTargetId;
+    const remark = forceReturnRemark.trim() || 'Force returned by admin';
+
+    if (!id) return;
+
+    setRentalActionLoading(prev => ({ ...prev, [id]: 'approve' }));
+    try {
+      await api.post(`${RENTALS_BASE}${id}/force_return/`, { remark });
+      toast.success('Equipment force returned!');
+      await fetchRentals();
+      await fetchEquipment();
+      setIsForceReturnDialogOpen(false);
+      setForceReturnTargetId(null);
+      setForceReturnRemark('');
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.response?.data?.detail || 'Failed to force return');
+    } finally {
+      setRentalActionLoading(prev => ({ ...prev, [id]: null }));
+    }
+  };
+
+
   /**
    * Approves equipment return with admin remark
    */
@@ -1280,6 +1321,49 @@ export function AdminEquipmentManagement({
               disabled={returnApprovalTargetId == null || rentalsLoading}
             >
               Approve Return
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ====== FORCE RETURN DIALOG ====== */}
+      <Dialog open={isForceReturnDialogOpen} onOpenChange={setIsForceReturnDialogOpen}>
+        <DialogContent className={`${dialogFitClass} max-w-xl ${theme === 'light' ? 'bg-white' : 'bg-gray-900 border-gray-800'}`}>
+          <DialogHeader>
+            <DialogTitle className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Force Return Equipment</DialogTitle>
+            <DialogDescription className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+              Force return this equipment without student action (for overdue/lost scenarios). Add a remark explaining the reason.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Admin Remark</Label>
+            <Textarea
+              value={forceReturnRemark}
+              onChange={(e) => setForceReturnRemark(e.target.value)}
+              rows={4}
+              placeholder="e.g. Equipment overdue - force returned / Student lost equipment / Equipment found in lab..."
+              className={`${theme === 'light'
+                ? 'bg-gray-50 border-gray-200 text-gray-900'
+                : 'bg-gray-800 border-gray-700 text-white'
+                }`}
+            />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsForceReturnDialogOpen(false)}
+              className={theme === 'light' ? 'border-gray-200' : 'border-gray-700'}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmForceReturn}
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+              disabled={forceReturnTargetId == null || rentalsLoading}
+            >
+              Force Return
             </Button>
           </div>
         </DialogContent>
@@ -1936,6 +2020,7 @@ export function AdminEquipmentManagement({
                   <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Reviewed</TableHead>
                   <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Status</TableHead>
                   <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Remark</TableHead>
+                  <TableHead className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Actions</TableHead>
                 </TableRow>
               </TableHeader>
 
@@ -1992,12 +2077,24 @@ export function AdminEquipmentManagement({
                         {r.return_remark || r.reject_reason || '—'}
                       </div>
                     </TableCell>
+
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-orange-500/50 text-orange-400 hover:bg-orange-500/10"
+                        disabled={rentalsLoading || rentalActionLoading[r.id] !== null}
+                        onClick={() => openForceReturnDialog(r.id)}
+                      >
+                        Force Return
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
 
                 {!rentalsLoading && activeRentals.length === 0 && (
                   <TableRow className={theme === 'light' ? 'border-gray-200' : 'border-gray-800'}>
-                    <TableCell colSpan={6} className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
+                    <TableCell colSpan={7} className={theme === 'light' ? 'text-gray-600' : 'text-gray-400'}>
                       No active rentals right now.
                     </TableCell>
                   </TableRow>

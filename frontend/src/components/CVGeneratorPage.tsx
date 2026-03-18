@@ -2689,11 +2689,15 @@ export function CVGeneratorPage() {
                     </p>
                     <div className="flex flex-col gap-3 max-w-md mx-auto">
                       <Button
-                        onClick={() => setShowPreview(true)}
+                        onClick={async () => {
+                          const saved = await handleSave({ silent: true });
+                          if (saved) setShowPreview(true);
+                        }}
                         className="bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white"
+                        disabled={saving}
                       >
                         <FileText className="h-4 w-4 mr-2" />
-                        Preview CV
+                        {saving ? 'Saving...' : 'Preview CV'}
                       </Button>
 
                       <Button

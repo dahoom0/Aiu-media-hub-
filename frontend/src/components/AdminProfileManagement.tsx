@@ -303,16 +303,24 @@ export function AdminProfileManagement({
         <Card className={theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-900/50 border-gray-800'}>
           <CardContent className="p-8 space-y-8">
             <div className="flex items-center gap-6">
-              <div
-                className={`flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br ${
-                  profileType === 'student' ? 'from-teal-500 to-cyan-500' : 'from-purple-500 to-pink-500'
-                } text-white text-3xl`}
-              >
-                {selectedProfile.name
-                  .split(' ')
-                  .map((n) => n[0])
-                  .join('')}
-              </div>
+              {selectedProfile.profilePicture ? (
+                <img
+                  src={selectedProfile.profilePicture}
+                  alt={selectedProfile.name}
+                  className="h-24 w-24 rounded-full object-cover border-4 border-teal-500/30"
+                />
+              ) : (
+                <div
+                  className={`flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br ${
+                    profileType === 'student' ? 'from-teal-500 to-cyan-500' : 'from-purple-500 to-pink-500'
+                  } text-white text-3xl`}
+                >
+                  {selectedProfile.name
+                    .split(' ')
+                    .map((n) => n[0])
+                    .join('')}
+                </div>
+              )}
               <div>
                 <h2 className={`text-2xl mb-1 ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
                   {selectedProfile.name}
@@ -508,12 +516,20 @@ export function AdminProfileManagement({
                     <TableRow key={student.id} className={theme === 'light' ? 'border-gray-200' : 'border-gray-800'}>
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-teal-500 to-cyan-500 text-white">
-                            {student.name
-                              .split(' ')
-                              .map((n) => n[0])
-                              .join('')}
-                          </div>
+                          {student.profilePicture ? (
+                            <img
+                              src={student.profilePicture}
+                              alt={student.name}
+                              className="h-10 w-10 rounded-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-teal-500 to-cyan-500 text-white">
+                              {student.name
+                                .split(' ')
+                                .map((n) => n[0])
+                                .join('')}
+                            </div>
+                          )}
 
                           {/* ✅ FIX: show ONLY full name (do NOT show year under the name) */}
                           <div>

@@ -743,3 +743,33 @@ class Award(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class Notification(models.Model):
+    """User notifications for equipment returns, approvals, rejections"""
+    NOTIFICATION_TYPES = (
+        ('return_received', 'Return Received'),
+        ('return_approved', 'Return Approved'),
+        ('return_rejected', 'Return Rejected'),
+        ('rental_approved', 'Rental Approved'),
+        ('rental_rejected', 'Rental Rejected'),
+        ('general', 'General'),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    notification_type = models.CharField(max_length=50, choices=NOTIFICATION_TYPES, default='general')
+    is_read = models.BooleanField(default=False)
+    related_rental_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'notifications'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'is_read']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.title}"
