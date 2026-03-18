@@ -67,8 +67,9 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:-aiu123}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-this-in-production}
       DEBUG: ${DEBUG:-False}
+      DOCKER_ENV: "true"
       DJANGO_SETTINGS_MODULE: aiu_backend.settings
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+      ALLOWED_HOSTS: "*"
     depends_on:
       db:
         condition: service_healthy

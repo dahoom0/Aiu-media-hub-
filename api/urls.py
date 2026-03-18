@@ -44,6 +44,9 @@ router.register(r'languages', views.LanguageViewSet, basename='language')
 router.register(r'awards', views.AwardViewSet, basename='award')
 
 urlpatterns = [
+    # --- Health check ---
+    path('health/', views.health_check, name='health-check'),
+    
     # --- Auth endpoints ---
     path('auth/register/', views.register, name='register'),
     path('auth/login/', views.login, name='login'),

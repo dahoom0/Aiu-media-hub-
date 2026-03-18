@@ -25,6 +25,19 @@ from .serializers import *
 User = get_user_model()
 
 
+# ---------------- HEALTH CHECK ---------------- #
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def health_check(request):
+    """Simple health check endpoint for Docker and monitoring"""
+    return Response({
+        "status": "healthy",
+        "service": "AIU Media Hub API",
+        "timestamp": timezone.now().isoformat()
+    })
+
+
 class IsAdminUser(permissions.BasePermission):
     def has_permission(self, request, view):
         return (

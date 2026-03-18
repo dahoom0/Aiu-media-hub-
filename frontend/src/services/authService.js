@@ -31,14 +31,33 @@ const pickUserShape = (data) => {
 const authService = {
   // ---------------- AUTH ----------------
   login: async (username, password) => {
-    const res = await api.post('/auth/login/', { username, password });
-    const { tokens, mergedUser } = pickUserShape(res.data);
+    try {
+      console.log('Attempting login for:', username);
+      const res = await api.post('/auth/login/', { username, password });
+      console.log('Login response:', res.data);
+      
+      const { tokens, mergedUser } = pickUserShape(res.data);
+      console.log('Parsed tokens:', tokens ? 'present' : 'missing');
+      console.log('Merged user:', mergedUser);
 
-    if (tokens?.access) localStorage.setItem('accessToken', tokens.access);
-    if (tokens?.refresh) localStorage.setItem('refreshToken', tokens.refresh);
-    localStorage.setItem('user', JSON.stringify(mergedUser));
+      if (tokens?.access) {
+        localStorage.setItem('accessToken', tokens.access);
+        console.log('Access token saved');
+      }
+      if (tokens?.refresh) {
+        localStorage.setItem('refreshToken', tokens.refresh);
+        console.log('Refresh token saved');
+      }
+      localStorage.setItem('user', JSON.stringify(mergedUser));
+      console.log('User data saved to localStorage');
 
-    return res.data;
+      return res.data;
+    } catch (error) {
+      console.error('Login failed:', error);
+      console.error('Error response:', error.response?.data);
+      console.error('Error status:', error.response?.status);
+      throw error;
+    }
   },
 
   register: async (payload) => {
