@@ -302,6 +302,35 @@ export function AdminLabManagement() {
     }
   };
 
+  const handleEditLab = (lab: Lab) => {
+    // Set form fields with lab data
+    setNewLabName(lab.name);
+    setNewLabCapacity(String(lab.capacity));
+    setNewLabDescription(''); // Backend doesn't return these fields yet
+    setNewLabLocation('');
+    setNewLabFacilities('');
+    
+    // TODO: Implement edit functionality
+    toast.info('Edit functionality coming soon');
+  };
+
+  const handleDeleteLab = async (lab: Lab) => {
+    if (!confirm(`Are you sure you want to delete "${lab.name}"?`)) {
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      await labAdminService.deleteLab(lab.id);
+      toast.success('Lab deleted successfully!');
+      await loadAll();
+    } catch (e: any) {
+      toast.error(getErrMsg(e) || 'Failed to delete lab');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleExportLab = async (lab: Lab) => {
     try {
       setExportingLabId(lab.id);
@@ -499,11 +528,16 @@ export function AdminLabManagement() {
                             <FileDown className={`h-4 w-4 ${exportingLabId === lab.id ? 'animate-pulse' : ''}`} />
                           </Button>
 
-                          <Button size="sm" variant="ghost">
+                          <Button size="sm" variant="ghost" onClick={() => handleEditLab(lab)}>
                             <Edit className="h-4 w-4" />
                           </Button>
 
-                          <Button size="sm" variant="ghost" className="text-red-400">
+                          <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            className="text-red-400"
+                            onClick={() => handleDeleteLab(lab)}
+                          >
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
